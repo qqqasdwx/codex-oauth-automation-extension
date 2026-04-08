@@ -37,6 +37,7 @@ const inputInbucketMailbox = document.getElementById('input-inbucket-mailbox');
 const inputRunCount = document.getElementById('input-run-count');
 const inputAutoSkipFailures = document.getElementById('input-auto-skip-failures');
 const autoStartModal = document.getElementById('auto-start-modal');
+const autoStartTitle = autoStartModal?.querySelector('.modal-title');
 const autoStartMessage = document.getElementById('auto-start-message');
 const btnAutoStartClose = document.getElementById('btn-auto-start-close');
 const btnAutoStartCancel = document.getElementById('btn-auto-start-cancel');
@@ -66,7 +67,8 @@ let currentAutoRun = {
 let settingsDirty = false;
 let settingsSaveInFlight = false;
 let settingsAutoSaveTimer = null;
-let autoStartChoiceResolver = null;
+let modalChoiceResolver = null;
+let currentModalActions = [];
 
 const EYE_OPEN_ICON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg>';
 const EYE_CLOSED_ICON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.94 17.94A10.94 10.94 0 0 1 12 19C5 19 1 12 1 12a21.77 21.77 0 0 1 5.06-6.94"/><path d="M9.9 4.24A10.94 10.94 0 0 1 12 5c7 0 11 7 11 7a21.86 21.86 0 0 1-2.16 3.19"/><path d="M1 1l22 22"/><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"/></svg>';
@@ -110,31 +112,87 @@ function dismissToast(toast) {
   toast.addEventListener('animationend', () => toast.remove());
 }
 
-function resolveAutoStartChoice(choice) {
-  if (autoStartChoiceResolver) {
-    autoStartChoiceResolver(choice);
-    autoStartChoiceResolver = null;
+function resetActionModalButtons() {
+  const buttons = [btnAutoStartCancel, btnAutoStartRestart, btnAutoStartContinue];
+  buttons.forEach((button) => {
+    if (!button) return;
+    button.hidden = true;
+    button.disabled = false;
+    button.onclick = null;
+  });
+  currentModalActions = [];
+}
+
+function configureActionModalButton(button, action) {
+  if (!button) return;
+  if (!action) {
+    button.hidden = true;
+    button.onclick = null;
+    return;
   }
+
+  button.hidden = false;
+  button.disabled = false;
+  button.textContent = action.label;
+  button.className = `btn ${action.variant || 'btn-outline'} btn-sm`;
+  button.onclick = () => resolveModalChoice(action.id);
+}
+
+function resolveModalChoice(choice) {
+  if (modalChoiceResolver) {
+    modalChoiceResolver(choice);
+    modalChoiceResolver = null;
+  }
+  resetActionModalButtons();
   if (autoStartModal) {
     autoStartModal.hidden = true;
   }
 }
 
-function openAutoStartChoiceDialog(startStep) {
+function openActionModal({ title, message, actions }) {
   if (!autoStartModal) {
-    return Promise.resolve('restart');
+    return Promise.resolve(null);
   }
 
-  if (autoStartChoiceResolver) {
-    resolveAutoStartChoice(null);
+  if (modalChoiceResolver) {
+    resolveModalChoice(null);
   }
 
-  autoStartMessage.textContent = `检测到当前已有流程进度。继续当前会从步骤 ${startStep} 开始自动执行，重新开始会清空当前流程进度并从步骤 1 新开一轮。`;
+  autoStartTitle.textContent = title;
+  autoStartMessage.textContent = message;
+  currentModalActions = actions || [];
+  configureActionModalButton(btnAutoStartCancel, currentModalActions[0]);
+  configureActionModalButton(btnAutoStartRestart, currentModalActions[1]);
+  configureActionModalButton(btnAutoStartContinue, currentModalActions[2]);
   autoStartModal.hidden = false;
 
   return new Promise((resolve) => {
-    autoStartChoiceResolver = resolve;
+    modalChoiceResolver = resolve;
   });
+}
+
+function openAutoStartChoiceDialog(startStep) {
+  return openActionModal({
+    title: '启动自动',
+    message: `检测到当前已有流程进度。继续当前会从步骤 ${startStep} 开始自动执行，重新开始会清空当前流程进度并从步骤 1 新开一轮。`,
+    actions: [
+      { id: null, label: '取消', variant: 'btn-ghost' },
+      { id: 'restart', label: '重新开始', variant: 'btn-outline' },
+      { id: 'continue', label: '继续当前', variant: 'btn-primary' },
+    ],
+  });
+}
+
+async function openConfirmModal({ title, message, confirmLabel = '确认', confirmVariant = 'btn-primary' }) {
+  const choice = await openActionModal({
+    title,
+    message,
+    actions: [
+      { id: null, label: '取消', variant: 'btn-ghost' },
+      { id: 'confirm', label: confirmLabel, variant: confirmVariant },
+    ],
+  });
+  return choice === 'confirm';
 }
 
 function isDoneStatus(status) {
@@ -634,7 +692,12 @@ async function maybeTakeoverAutoRun(actionLabel) {
     return true;
   }
 
-  const confirmed = confirm(`当前自动流程已暂停。若继续${actionLabel}，将停止自动流程并切换为手动控制。是否继续？`);
+  const confirmed = await openConfirmModal({
+    title: '接管自动',
+    message: `当前自动流程已暂停。若继续${actionLabel}，将停止自动流程并切换为手动控制。是否继续？`,
+    confirmLabel: '确认接管',
+    confirmVariant: 'btn-primary',
+  });
   if (!confirmed) {
     return false;
   }
@@ -648,7 +711,12 @@ async function handleSkipStep(step) {
     return;
   }
 
-  const confirmed = confirm(`这不会真正执行步骤 ${step}，只会直接跳过该步骤并放行后续步骤。是否继续？`);
+  const confirmed = await openConfirmModal({
+    title: '跳过步骤',
+    message: `这不会真正执行步骤 ${step}，只会直接跳过该步骤并放行后续步骤。是否继续？`,
+    confirmLabel: `跳过步骤 ${step}`,
+    confirmVariant: 'btn-primary',
+  });
   if (!confirmed) {
     return;
   }
@@ -736,13 +804,10 @@ btnStop.addEventListener('click', async () => {
 
 autoStartModal?.addEventListener('click', (event) => {
   if (event.target === autoStartModal) {
-    resolveAutoStartChoice(null);
+    resolveModalChoice(null);
   }
 });
-btnAutoStartClose?.addEventListener('click', () => resolveAutoStartChoice(null));
-btnAutoStartCancel?.addEventListener('click', () => resolveAutoStartChoice(null));
-btnAutoStartRestart?.addEventListener('click', () => resolveAutoStartChoice('restart'));
-btnAutoStartContinue?.addEventListener('click', () => resolveAutoStartChoice('continue'));
+btnAutoStartClose?.addEventListener('click', () => resolveModalChoice(null));
 
 // Auto Run
 btnAutoRun.addEventListener('click', async () => {
@@ -793,27 +858,35 @@ btnAutoContinue.addEventListener('click', async () => {
 
 // Reset
 btnReset.addEventListener('click', async () => {
-  if (confirm('确认重置全部步骤和数据吗？')) {
-    await chrome.runtime.sendMessage({ type: 'RESET', source: 'sidepanel' });
-    syncLatestState({ stepStatuses: STEP_DEFAULT_STATUSES });
-    syncAutoRunState({ autoRunning: false, autoRunPhase: 'idle', autoRunCurrentRun: 0, autoRunTotalRuns: 1, autoRunAttemptRun: 0 });
-    displayOauthUrl.textContent = '等待中...';
-    displayOauthUrl.classList.remove('has-value');
-    displayLocalhostUrl.textContent = '等待中...';
-    displayLocalhostUrl.classList.remove('has-value');
-    inputEmail.value = '';
-    displayStatus.textContent = '就绪';
-    statusBar.className = 'status-bar';
-    logArea.innerHTML = '';
-    document.querySelectorAll('.step-row').forEach(row => row.className = 'step-row');
-    document.querySelectorAll('.step-status').forEach(el => el.textContent = '');
-    setDefaultAutoRunButton();
-    applyAutoRunStatus(currentAutoRun);
-    markSettingsDirty(false);
-    updateStopButtonState(false);
-    updateButtonStates();
-    updateProgressCounter();
+  const confirmed = await openConfirmModal({
+    title: '重置流程',
+    message: '确认重置全部步骤和数据吗？',
+    confirmLabel: '确认重置',
+    confirmVariant: 'btn-danger',
+  });
+  if (!confirmed) {
+    return;
   }
+
+  await chrome.runtime.sendMessage({ type: 'RESET', source: 'sidepanel' });
+  syncLatestState({ stepStatuses: STEP_DEFAULT_STATUSES });
+  syncAutoRunState({ autoRunning: false, autoRunPhase: 'idle', autoRunCurrentRun: 0, autoRunTotalRuns: 1, autoRunAttemptRun: 0 });
+  displayOauthUrl.textContent = '等待中...';
+  displayOauthUrl.classList.remove('has-value');
+  displayLocalhostUrl.textContent = '等待中...';
+  displayLocalhostUrl.classList.remove('has-value');
+  inputEmail.value = '';
+  displayStatus.textContent = '就绪';
+  statusBar.className = 'status-bar';
+  logArea.innerHTML = '';
+  document.querySelectorAll('.step-row').forEach(row => row.className = 'step-row');
+  document.querySelectorAll('.step-status').forEach(el => el.textContent = '');
+  setDefaultAutoRunButton();
+  applyAutoRunStatus(currentAutoRun);
+  markSettingsDirty(false);
+  updateStopButtonState(false);
+  updateButtonStates();
+  updateProgressCounter();
 });
 
 // Clear log
