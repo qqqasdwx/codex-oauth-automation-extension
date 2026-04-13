@@ -161,7 +161,7 @@ Step 1 和 Step 9 都依赖这个地址。
 使用方式：
 
 - 先选择 Hotmail 接码模式
-- 远程模式下填写远程服务地址（默认兼容 `https://apple.882263.xyz`）
+- 远程模式下填写你自己的远程服务地址
 - 本地模式下填写本地助手地址（默认 `http://127.0.0.1:17373`）
 - Windows 运行仓库根目录的 `start-hotmail-helper.bat`
 - macOS 运行仓库根目录的 `start-hotmail-helper.command`
