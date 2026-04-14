@@ -153,6 +153,9 @@ let currentAutoRun = {
   totalRuns: 1,
   attemptRun: 0,
   scheduledAt: null,
+  countdownAt: null,
+  countdownTitle: '',
+  countdownNote: '',
 };
 let settingsDirty = false;
 let settingsSaveInFlight = false;
@@ -574,26 +577,45 @@ function syncLatestState(nextState) {
   };
 }
 
+function hasOwnStateValue(source, key) {
+  return Object.prototype.hasOwnProperty.call(source, key);
+}
+
+function readAutoRunStateValue(source, keys, fallback) {
+  for (const key of keys) {
+    if (hasOwnStateValue(source, key)) {
+      return source[key];
+    }
+  }
+  return fallback;
+}
+
 function syncAutoRunState(source = {}) {
   const phase = source.autoRunPhase ?? source.phase ?? currentAutoRun.phase;
   const autoRunning = source.autoRunning !== undefined
     ? Boolean(source.autoRunning)
     : (source.autoRunPhase !== undefined || source.phase !== undefined
-      ? ['scheduled', 'running', 'waiting_step', 'waiting_email', 'retrying'].includes(phase)
+      ? ['scheduled', 'running', 'waiting_step', 'waiting_email', 'retrying', 'waiting_interval'].includes(phase)
       : currentAutoRun.autoRunning);
 
   currentAutoRun = {
     autoRunning,
     phase,
-    currentRun: source.autoRunCurrentRun ?? source.currentRun ?? currentAutoRun.currentRun,
-    totalRuns: source.autoRunTotalRuns ?? source.totalRuns ?? currentAutoRun.totalRuns,
-    attemptRun: source.autoRunAttemptRun ?? source.attemptRun ?? currentAutoRun.attemptRun,
-    scheduledAt: source.scheduledAutoRunAt ?? source.scheduledAt ?? currentAutoRun.scheduledAt,
+    currentRun: readAutoRunStateValue(source, ['autoRunCurrentRun', 'currentRun'], currentAutoRun.currentRun),
+    totalRuns: readAutoRunStateValue(source, ['autoRunTotalRuns', 'totalRuns'], currentAutoRun.totalRuns),
+    attemptRun: readAutoRunStateValue(source, ['autoRunAttemptRun', 'attemptRun'], currentAutoRun.attemptRun),
+    scheduledAt: readAutoRunStateValue(source, ['scheduledAutoRunAt', 'scheduledAt'], currentAutoRun.scheduledAt),
+    countdownAt: readAutoRunStateValue(source, ['autoRunCountdownAt', 'countdownAt'], currentAutoRun.countdownAt),
+    countdownTitle: readAutoRunStateValue(source, ['autoRunCountdownTitle', 'countdownTitle'], currentAutoRun.countdownTitle),
+    countdownNote: readAutoRunStateValue(source, ['autoRunCountdownNote', 'countdownNote'], currentAutoRun.countdownNote),
   };
 }
 
 function isAutoRunLockedPhase() {
-  return currentAutoRun.phase === 'running' || currentAutoRun.phase === 'waiting_step' || currentAutoRun.phase === 'retrying';
+  return currentAutoRun.phase === 'running'
+    || currentAutoRun.phase === 'waiting_step'
+    || currentAutoRun.phase === 'retrying'
+    || currentAutoRun.phase === 'waiting_interval';
 }
 
 function isAutoRunPausedPhase() {
@@ -705,18 +727,46 @@ function stopScheduledCountdownTicker() {
   scheduledCountdownTimer = null;
 }
 
+function getActiveAutoRunCountdown() {
+  if (isAutoRunScheduledPhase() && Number.isFinite(currentAutoRun.scheduledAt)) {
+    return {
+      at: currentAutoRun.scheduledAt,
+      title: '已计划自动运行',
+      note: `计划于 ${formatScheduleTime(currentAutoRun.scheduledAt)} 开始`,
+      tone: 'scheduled',
+    };
+  }
+
+  if (!Number.isFinite(currentAutoRun.countdownAt)) {
+    return null;
+  }
+
+  return {
+    at: currentAutoRun.countdownAt,
+    title: currentAutoRun.countdownTitle || '等待中',
+    note: currentAutoRun.countdownNote || '',
+    tone: 'running',
+  };
+}
+
 function renderScheduledAutoRunInfo() {
   if (!autoScheduleBar) {
     return;
   }
 
-  if (!isAutoRunScheduledPhase() || !Number.isFinite(currentAutoRun.scheduledAt)) {
+  const countdown = getActiveAutoRunCountdown();
+  if (!countdown) {
     autoScheduleBar.style.display = 'none';
     return;
   }
 
-  const remainingMs = currentAutoRun.scheduledAt - Date.now();
+  const remainingMs = countdown.at - Date.now();
   autoScheduleBar.style.display = 'flex';
+  autoScheduleTitle.textContent = countdown.title;
+  autoScheduleMeta.textContent = remainingMs > 0
+    ? `${countdown.note ? `${countdown.note}，` : ''}剩余 ${formatCountdown(remainingMs)}`
+    : '倒计时即将结束，正在准备继续...';
+  return;
   autoScheduleTitle.textContent = '已计划自动运行';
   autoScheduleMeta.textContent = remainingMs > 0
     ? `计划于 ${formatScheduleTime(currentAutoRun.scheduledAt)} 开始，剩余 ${formatCountdown(remainingMs)}`
@@ -725,19 +775,20 @@ function renderScheduledAutoRunInfo() {
 
 function syncScheduledCountdownTicker() {
   renderScheduledAutoRunInfo();
-  if (!isAutoRunScheduledPhase() || !Number.isFinite(currentAutoRun.scheduledAt)) {
-    stopScheduledCountdownTicker();
+  if (getActiveAutoRunCountdown()) {
+    if (scheduledCountdownTimer) {
+      return;
+    }
+
+    scheduledCountdownTimer = setInterval(() => {
+      renderScheduledAutoRunInfo();
+      updateStatusDisplay(latestState);
+    }, 1000);
     return;
   }
 
-  if (scheduledCountdownTimer) {
-    return;
-  }
-
-  scheduledCountdownTimer = setInterval(() => {
-    renderScheduledAutoRunInfo();
-    updateStatusDisplay(latestState);
-  }, 1000);
+  stopScheduledCountdownTicker();
+  return;
 }
 
 function setDefaultAutoRunButton() {
@@ -1044,6 +1095,10 @@ function applyAutoRunStatus(payload = currentAutoRun) {
     case 'retrying':
       autoContinueBar.style.display = 'none';
       btnAutoRun.innerHTML = `重试中${runLabel}`;
+      break;
+    case 'waiting_interval':
+      autoContinueBar.style.display = 'none';
+      btnAutoRun.innerHTML = `等待中${runLabel}`;
       break;
     default:
       autoContinueBar.style.display = 'none';
@@ -1880,6 +1935,16 @@ function updateStatusDisplay(state) {
   if (!state || !state.stepStatuses) return;
 
   statusBar.className = 'status-bar';
+
+  const countdown = getActiveAutoRunCountdown();
+  if (countdown) {
+    const remainingMs = countdown.at - Date.now();
+    displayStatus.textContent = remainingMs > 0
+      ? `${countdown.title}，剩余 ${formatCountdown(remainingMs)}`
+      : `${countdown.title}，即将结束...`;
+    statusBar.classList.add(countdown.tone === 'scheduled' ? 'scheduled' : 'running');
+    return;
+  }
 
   if (isAutoRunScheduledPhase()) {
     const remainingMs = Number.isFinite(currentAutoRun.scheduledAt)
@@ -2775,6 +2840,9 @@ btnReset.addEventListener('click', async () => {
     autoRunTotalRuns: 1,
     autoRunAttemptRun: 0,
     scheduledAutoRunAt: null,
+    autoRunCountdownAt: null,
+    autoRunCountdownTitle: '',
+    autoRunCountdownNote: '',
   });
   displayOauthUrl.textContent = '等待中...';
   displayOauthUrl.classList.remove('has-value');
@@ -3089,6 +3157,9 @@ chrome.runtime.onMessage.addListener((message) => {
         stepStatuses: STEP_DEFAULT_STATUSES,
         logs: [],
         scheduledAutoRunAt: null,
+        autoRunCountdownAt: null,
+        autoRunCountdownTitle: '',
+        autoRunCountdownNote: '',
       });
       displayOauthUrl.textContent = '等待中...';
       displayOauthUrl.classList.remove('has-value');
@@ -3100,6 +3171,17 @@ chrome.runtime.onMessage.addListener((message) => {
       logArea.innerHTML = '';
       document.querySelectorAll('.step-row').forEach(row => row.className = 'step-row');
       document.querySelectorAll('.step-status').forEach(el => el.textContent = '');
+      syncAutoRunState({
+        autoRunning: false,
+        autoRunPhase: 'idle',
+        autoRunCurrentRun: 0,
+        autoRunTotalRuns: 1,
+        autoRunAttemptRun: 0,
+        scheduledAutoRunAt: null,
+        autoRunCountdownAt: null,
+        autoRunCountdownTitle: '',
+        autoRunCountdownNote: '',
+      });
       applyAutoRunStatus(currentAutoRun);
       updateProgressCounter();
       updateButtonStates();
@@ -3157,12 +3239,15 @@ chrome.runtime.onMessage.addListener((message) => {
 
     case 'AUTO_RUN_STATUS': {
       syncLatestState({
-        autoRunning: ['scheduled', 'running', 'waiting_step', 'waiting_email', 'retrying'].includes(message.payload.phase),
+        autoRunning: ['scheduled', 'running', 'waiting_step', 'waiting_email', 'retrying', 'waiting_interval'].includes(message.payload.phase),
         autoRunPhase: message.payload.phase,
         autoRunCurrentRun: message.payload.currentRun,
         autoRunTotalRuns: message.payload.totalRuns,
         autoRunAttemptRun: message.payload.attemptRun,
         scheduledAutoRunAt: message.payload.scheduledAt ?? null,
+        autoRunCountdownAt: message.payload.countdownAt ?? null,
+        autoRunCountdownTitle: message.payload.countdownTitle ?? '',
+        autoRunCountdownNote: message.payload.countdownNote ?? '',
       });
       applyAutoRunStatus(message.payload);
       updateStatusDisplay(latestState);

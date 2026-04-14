@@ -118,6 +118,9 @@ const DEFAULT_STATE = {
   autoRunRoundSummaries: [], // 自动运行轮次摘要。
   scheduledAutoRunAt: null, // 自动运行计划启动时间戳。
   scheduledAutoRunPlan: null, // 自动运行计划参数快照。
+  autoRunCountdownAt: null,
+  autoRunCountdownTitle: '',
+  autoRunCountdownNote: '',
   signupVerificationRequestedAt: null,
   loginVerificationRequestedAt: null,
   currentHotmailAccountId: null,
@@ -2337,7 +2340,20 @@ function getAutoRunStatusPayload(phase, payload = {}) {
     ? (payload.scheduledAt ?? payload.scheduledAutoRunAt ?? null)
     : null;
   const scheduledAt = rawScheduledAt === null ? null : Number(rawScheduledAt);
-  const autoRunning = phase === 'scheduled' || phase === 'running' || phase === 'waiting_step' || phase === 'waiting_email' || phase === 'retrying';
+  const rawCountdownAt = payload.countdownAt ?? payload.autoRunCountdownAt ?? null;
+  const countdownAt = rawCountdownAt === null ? null : Number(rawCountdownAt);
+  const countdownTitle = payload.countdownTitle === undefined
+    ? ''
+    : String(payload.countdownTitle || '');
+  const countdownNote = payload.countdownNote === undefined
+    ? ''
+    : String(payload.countdownNote || '');
+  const autoRunning = phase === 'scheduled'
+    || phase === 'running'
+    || phase === 'waiting_step'
+    || phase === 'waiting_email'
+    || phase === 'retrying'
+    || phase === 'waiting_interval';
 
   return {
     autoRunning,
@@ -2346,6 +2362,9 @@ function getAutoRunStatusPayload(phase, payload = {}) {
     autoRunTotalRuns: totalRuns,
     autoRunAttemptRun: attemptRun,
     scheduledAutoRunAt: Number.isFinite(scheduledAt) ? scheduledAt : null,
+    autoRunCountdownAt: Number.isFinite(countdownAt) ? countdownAt : null,
+    autoRunCountdownTitle: countdownTitle,
+    autoRunCountdownNote: countdownNote,
   };
 }
 
@@ -2353,12 +2372,16 @@ async function broadcastAutoRunStatus(phase, payload = {}, extraState = {}) {
   const rawScheduledAt = phase === 'scheduled'
     ? (payload.scheduledAt ?? payload.scheduledAutoRunAt ?? null)
     : null;
+  const rawCountdownAt = payload.countdownAt ?? payload.autoRunCountdownAt ?? null;
   const statusPayload = {
     phase,
     currentRun: payload.currentRun ?? autoRunCurrentRun,
     totalRuns: payload.totalRuns ?? autoRunTotalRuns,
     attemptRun: payload.attemptRun ?? autoRunAttemptRun,
     scheduledAt: rawScheduledAt === null ? null : Number(rawScheduledAt),
+    countdownAt: rawCountdownAt === null ? null : Number(rawCountdownAt),
+    countdownTitle: payload.countdownTitle === undefined ? '' : String(payload.countdownTitle || ''),
+    countdownNote: payload.countdownNote === undefined ? '' : String(payload.countdownNote || ''),
   };
 
   await setState({
@@ -2372,7 +2395,13 @@ async function broadcastAutoRunStatus(phase, payload = {}, extraState = {}) {
 }
 
 function isAutoRunLockedState(state) {
-  return Boolean(state.autoRunning) && (state.autoRunPhase === 'running' || state.autoRunPhase === 'waiting_step' || state.autoRunPhase === 'retrying');
+  return Boolean(state.autoRunning)
+    && (
+      state.autoRunPhase === 'running'
+      || state.autoRunPhase === 'waiting_step'
+      || state.autoRunPhase === 'retrying'
+      || state.autoRunPhase === 'waiting_interval'
+    );
 }
 
 function isAutoRunPausedState(state) {
@@ -2452,6 +2481,9 @@ async function scheduleAutoRun(totalRuns, options = {}) {
       totalRuns: plan.totalRuns,
       attemptRun: 0,
       scheduledAt,
+      countdownAt: scheduledAt,
+      countdownTitle: '已计划自动运行',
+      countdownNote: `计划于 ${formatAutoRunScheduleTime(scheduledAt)} 开始`,
     },
     {
       autoRunSkipFailures: plan.autoRunSkipFailures,
@@ -4025,6 +4057,18 @@ async function logAutoRunFinalSummary(totalRuns, roundSummaries = []) {
   }
 }
 
+async function sleepWithAutoRunCountdown(waitMs, payload = {}) {
+  if (!Number.isFinite(waitMs) || waitMs <= 0) {
+    return;
+  }
+
+  await broadcastAutoRunStatus('waiting_interval', {
+    ...payload,
+    countdownAt: Date.now() + waitMs,
+  });
+  await sleepWithStop(waitMs);
+}
+
 async function waitBetweenAutoRunRounds(targetRun, totalRuns, roundSummary) {
   if (totalRuns <= 1 || targetRun >= totalRuns) {
     return;
@@ -4042,7 +4086,13 @@ async function waitBetweenAutoRunRounds(targetRun, totalRuns, roundSummary) {
     `线程间隔：第 ${targetRun}/${totalRuns} 轮已${statusLabel}，等待 ${fallbackThreadIntervalMinutes} 分钟后开始下一轮。`,
     'info'
   );
-  await sleepWithStop(fallbackThreadIntervalMinutes * 60 * 1000);
+  await sleepWithAutoRunCountdown(fallbackThreadIntervalMinutes * 60 * 1000, {
+    currentRun: targetRun,
+    totalRuns,
+    attemptRun: autoRunAttemptRun,
+    countdownTitle: '线程间隔中',
+    countdownNote: `第 ${Math.min(targetRun + 1, totalRuns)}/${totalRuns} 轮即将开始`,
+  });
 }
 
 async function waitBeforeAutoRunRetry(targetRun, totalRuns, nextAttemptRun) {
@@ -4057,7 +4107,13 @@ async function waitBeforeAutoRunRetry(targetRun, totalRuns, nextAttemptRun) {
     `线程间隔：等待 ${fallbackThreadIntervalMinutes} 分钟后开始第 ${targetRun}/${totalRuns} 轮第 ${nextAttemptRun} 次尝试。`,
     'info'
   );
-  await sleepWithStop(fallbackThreadIntervalMinutes * 60 * 1000);
+  await sleepWithAutoRunCountdown(fallbackThreadIntervalMinutes * 60 * 1000, {
+    currentRun: targetRun,
+    totalRuns,
+    attemptRun: nextAttemptRun,
+    countdownTitle: '线程间隔中',
+    countdownNote: `第 ${targetRun}/${totalRuns} 轮第 ${nextAttemptRun} 次尝试即将开始`,
+  });
 }
 
 async function handleAutoRunLoopUnhandledError(error) {
