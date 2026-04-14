@@ -62,6 +62,8 @@ AI 至少要从用户输入中拿到下面这些信息：
 
 如果用户没有给版本号，就不能猜。
 
+如果用户说的是口语化版本号，例如 `8`、`8.0`、`v8`、`v8.0`，AI 也不能直接猜最终版本号，必须先向用户确认标准版本号，例如 `8.0.0`。只有在用户明确确认后，后续所有命令、提交、tag、Release 标题、Release 正文都必须统一使用严格的三段版本号 `x.y.z`，不能继续混用口语化写法。
+
 ## 固定变量模板
 
 每次执行本文时，先统一使用下面这组变量：
@@ -73,7 +75,7 @@ if (-not (Test-Path $GH)) {
 }
 
 $Repo = 'QLHazyCoder/codex-oauth-automation-extension'
-$TargetVersion = '<用户指定的版本号，但是必须按照版本标准写，v+x.x.x。比如： v6.5.0>'
+$TargetVersion = '<用户确认后的标准版本号，必须使用 x.y.z，例如：6.5.0>'
 $TargetTag = "v$TargetVersion"
 $ManifestPath = 'manifest.json'
 ```
