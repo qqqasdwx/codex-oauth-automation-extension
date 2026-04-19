@@ -51,7 +51,7 @@ function extractFunction(name) {
 test('sidepanel html contains contribution button in header', () => {
   const html = fs.readFileSync('sidepanel/sidepanel.html', 'utf8');
   assert.match(html, /id="btn-contribution-mode"/);
-  assert.match(html, />贡献</);
+  assert.match(html, />\u8d21\u732e</);
 });
 
 test('openContributionUploadPage opens upload page in a new tab directly', async () => {
@@ -87,18 +87,96 @@ return {
   ]);
 });
 
-test('openContributionUploadPage blocks while flow is running', async () => {
+test('isContributionButtonLocked keeps contribution button available during auto-run', () => {
   const bundle = [
+    extractFunction('isContributionButtonLocked'),
+  ].join('\n');
+
+  const api = new Function(`
+const currentAutoRun = { autoRunning: true, phase: 'running' };
+function getStepStatuses() {
+  return { 1: 'running', 2: 'pending' };
+}
+function isAutoRunLockedPhase() {
+  return true;
+}
+function isAutoRunPausedPhase() {
+  return false;
+}
+function isAutoRunScheduledPhase() {
+  return false;
+}
+${bundle}
+return { isContributionButtonLocked };
+`)();
+
+  assert.equal(api.isContributionButtonLocked(), false);
+});
+
+test('openContributionUploadPage remains available during auto-run', async () => {
+  const bundle = [
+    extractFunction('isContributionButtonLocked'),
+    extractFunction('openContributionUploadPage'),
+  ].join('\n');
+
+  const api = new Function(`
+const calls = [];
+const CONTRIBUTION_UPLOAD_URL = 'https://apikey.qzz.io/';
+const currentAutoRun = { autoRunning: true, phase: 'running' };
+function getStepStatuses() {
+  return { 1: 'running', 2: 'pending' };
+}
+function isAutoRunLockedPhase() {
+  return true;
+}
+function isAutoRunPausedPhase() {
+  return false;
+}
+function isAutoRunScheduledPhase() {
+  return false;
+}
+function openExternalUrl(url) {
+  calls.push({ type: 'open', url });
+}
+${bundle}
+return {
+  openContributionUploadPage,
+  getCalls() {
+    return calls;
+  },
+};
+`)();
+
+  const result = await api.openContributionUploadPage();
+  assert.equal(result, true);
+  assert.deepStrictEqual(api.getCalls(), [
+    {
+      type: 'open',
+      url: 'https://apikey.qzz.io/',
+    },
+  ]);
+});
+
+test('openContributionUploadPage blocks while manual flow is running', async () => {
+  const bundle = [
+    extractFunction('isContributionButtonLocked'),
     extractFunction('openContributionUploadPage'),
   ].join('\n');
 
   const api = new Function(`
 const CONTRIBUTION_UPLOAD_URL = 'https://apikey.qzz.io/';
-function isContributionButtonLocked() {
-  return true;
+const currentAutoRun = { autoRunning: false, phase: 'idle' };
+function getStepStatuses() {
+  return { 1: 'running', 2: 'pending' };
 }
-async function openConfirmModal() {
-  throw new Error('should not open modal');
+function isAutoRunLockedPhase() {
+  return false;
+}
+function isAutoRunPausedPhase() {
+  return false;
+}
+function isAutoRunScheduledPhase() {
+  return false;
 }
 function openExternalUrl() {
   throw new Error('should not open url');
@@ -109,6 +187,9 @@ return { openContributionUploadPage };
 
   await assert.rejects(
     () => api.openContributionUploadPage(),
-    /当前流程运行中/
+    (error) => {
+      assert.match(error.message, /\u5f53\u524d\u6d41\u7a0b\u8fd0\u884c\u4e2d/);
+      return true;
+    }
   );
 });

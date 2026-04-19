@@ -931,9 +931,17 @@ function syncAutoRunState(source = {}) {
 }
 
 function isContributionButtonLocked() {
+  const autoActive = currentAutoRun.autoRunning
+    || isAutoRunLockedPhase()
+    || isAutoRunPausedPhase()
+    || isAutoRunScheduledPhase();
+  if (autoActive) {
+    return false;
+  }
+
   const statuses = getStepStatuses();
   const anyRunning = Object.values(statuses).some((status) => status === 'running');
-  return anyRunning || isAutoRunLockedPhase() || isAutoRunPausedPhase() || isAutoRunScheduledPhase();
+  return anyRunning;
 }
 
 function isAutoRunLockedPhase() {
