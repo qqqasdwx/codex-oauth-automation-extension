@@ -98,7 +98,7 @@
 
       await resolveVerificationStep(4, state, mail, {
         filterAfterTimestamp: stepStartedAt,
-        requestFreshCodeFirst: mail.provider === HOTMAIL_PROVIDER ? false : true,
+        requestFreshCodeFirst: false,
         resendIntervalMs: (mail.provider === HOTMAIL_PROVIDER || mail.provider === '2925')
           ? 0
           : STANDARD_MAIL_VERIFICATION_RESEND_INTERVAL_MS,

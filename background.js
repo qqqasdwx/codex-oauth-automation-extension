@@ -5968,6 +5968,7 @@ const verificationFlowHelpers = self.MultiPageBackgroundVerificationFlow?.create
   pollLuckmailVerificationCode,
   pollOutlookEmailVerificationCode,
   sendToContentScript,
+  sendToContentScriptResilient,
   sendToMailContentScriptResilient,
   setState,
   setStepStatus,

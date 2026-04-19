@@ -22,6 +22,7 @@
       pollLuckmailVerificationCode,
       pollOutlookEmailVerificationCode,
       sendToContentScript,
+      sendToContentScriptResilient,
       sendToMailContentScriptResilient,
       setState,
       sleepWithStop,
@@ -545,7 +546,81 @@
         throw new Error(result.error);
       }
 
+      if (result?.accepted) {
+        return waitForVerificationSubmitOutcomeResilient(step, options);
+      }
+
       return result || {};
+    }
+
+    async function getVerificationSubmitOutcomeSnapshot(step, options = {}) {
+      const sendOutcomeRequest = typeof sendToContentScriptResilient === 'function'
+        ? sendToContentScriptResilient
+        : sendToContentScript;
+      const result = await sendOutcomeRequest('signup-page', {
+        type: 'GET_VERIFICATION_SUBMIT_OUTCOME',
+        step,
+        source: 'background',
+        payload: {},
+      }, {
+        timeoutMs: await getResponseTimeoutMsForStep(
+          step,
+          options,
+          15000,
+          `检查${getVerificationCodeLabel(step)}验证码提交状态`
+        ),
+        retryDelayMs: 500,
+        logMessage: `步骤 ${step}：验证码提交后页面正在切换，等待状态稳定...`,
+        responseTimeoutMs: 5000,
+      });
+
+      if (result && result.error) {
+        throw new Error(result.error);
+      }
+
+      return result || {};
+    }
+
+    async function waitForVerificationSubmitOutcomeResilient(step, options = {}) {
+      const resolvedTimeout = await getResponseTimeoutMsForStep(
+        step,
+        options,
+        step === 8 ? 30000 : 12000,
+        `等待${getVerificationCodeLabel(step)}验证码提交结果`
+      );
+      const start = Date.now();
+      let lastResult = null;
+
+      while (Date.now() - start < resolvedTimeout) {
+        throwIfStopped();
+        const result = await getVerificationSubmitOutcomeSnapshot(step, options);
+        lastResult = result;
+
+        if (result.failed) {
+          throw new Error(result.error || `步骤 ${step}：验证码提交流程失败。`);
+        }
+        if (result.invalidCode || result.success || result.addPhonePage) {
+          return result;
+        }
+
+        await sleepWithStop(150);
+      }
+
+      const finalResult = await getVerificationSubmitOutcomeSnapshot(step, options).catch(() => lastResult || {});
+      if (finalResult.failed) {
+        throw new Error(finalResult.error || `步骤 ${step}：验证码提交流程失败。`);
+      }
+      if (finalResult.invalidCode || finalResult.success || finalResult.addPhonePage) {
+        return finalResult;
+      }
+      if (finalResult.verificationVisible) {
+        return {
+          invalidCode: true,
+          errorText: finalResult.errorText || '提交后仍停留在验证码页面，准备重新发送验证码。',
+        };
+      }
+
+      return { success: true, assumed: true };
     }
 
     async function resolveVerificationStep(step, state, mail, options = {}) {
@@ -729,11 +804,13 @@
         getVerificationCodeLabel,
         getVerificationCodeStateKey,
         getVerificationPollPayload,
+        getVerificationSubmitOutcomeSnapshot,
         pollFreshVerificationCode,
         pollFreshVerificationCodeWithResendInterval,
         requestVerificationCodeResend,
         resolveVerificationStep,
         submitVerificationCode,
+        waitForVerificationSubmitOutcomeResilient,
       };
     }
 

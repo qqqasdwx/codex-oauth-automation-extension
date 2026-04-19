@@ -164,6 +164,78 @@ test('verification flow runs beforeSubmit hook before filling the code', async (
   ]);
 });
 
+test('verification flow waits for deferred verification submit outcome after fill command is accepted', async () => {
+  const events = [];
+  let outcomeChecks = 0;
+
+  const helpers = api.createVerificationFlowHelpers({
+    addLog: async () => {},
+    chrome: {
+      tabs: {
+        update: async () => {},
+      },
+    },
+    CLOUDFLARE_TEMP_EMAIL_PROVIDER: 'cloudflare-temp-email',
+    completeStepFromBackground: async (_step, payload) => {
+      events.push(['complete', payload.code]);
+    },
+    confirmCustomVerificationStepBypassRequest: async () => ({ confirmed: true }),
+    getHotmailVerificationPollConfig: () => ({}),
+    getHotmailVerificationRequestTimestamp: () => 0,
+    getState: async () => ({}),
+    getTabId: async () => 1,
+    HOTMAIL_PROVIDER: 'hotmail-api',
+    isStopError: () => false,
+    LUCKMAIL_PROVIDER: 'luckmail-api',
+    MAIL_2925_VERIFICATION_INTERVAL_MS: 15000,
+    MAIL_2925_VERIFICATION_MAX_ATTEMPTS: 15,
+    pollCloudflareTempEmailVerificationCode: async () => ({}),
+    pollHotmailVerificationCode: async () => ({}),
+    pollLuckmailVerificationCode: async () => ({}),
+    sendToContentScript: async (_source, message) => {
+      if (message.type === 'FILL_CODE') {
+        events.push(['submit', message.payload.code]);
+        return { accepted: true };
+      }
+      throw new Error(`unexpected direct message: ${message.type}`);
+    },
+    sendToContentScriptResilient: async (_source, message) => {
+      if (message.type !== 'GET_VERIFICATION_SUBMIT_OUTCOME') {
+        throw new Error(`unexpected resilient message: ${message.type}`);
+      }
+      outcomeChecks += 1;
+      return outcomeChecks < 2
+        ? { pending: true, verificationVisible: true, phase: 'submitted' }
+        : { success: true };
+    },
+    sendToMailContentScriptResilient: async () => ({
+      code: '654321',
+      emailTimestamp: 123,
+    }),
+    setState: async (payload) => {
+      events.push(['state', payload.lastSignupCode || payload.lastLoginCode]);
+    },
+    setStepStatus: async () => {},
+    sleepWithStop: async () => {},
+    throwIfStopped: () => {},
+    VERIFICATION_POLL_MAX_ROUNDS: 5,
+  });
+
+  await helpers.resolveVerificationStep(
+    4,
+    { email: 'user@example.com', lastSignupCode: null },
+    { provider: 'qq', label: 'QQ 邮箱' },
+    {}
+  );
+
+  assert.equal(outcomeChecks, 2);
+  assert.deepStrictEqual(events, [
+    ['submit', '654321'],
+    ['state', '654321'],
+    ['complete', '654321'],
+  ]);
+});
+
 test('verification flow triggers 2925 mailbox cleanup only after code submission succeeds', async () => {
   const mailMessages = [];
 

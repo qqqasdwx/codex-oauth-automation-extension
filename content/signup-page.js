@@ -11,13 +11,20 @@ if (document.documentElement.getAttribute(SIGNUP_PAGE_LISTENER_SENTINEL) !== '1'
 
   // Listen for commands from Background
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (message.type === 'FILL_CODE') {
+      resetStopState();
+      startDetachedVerificationCodeSubmission(message);
+      sendResponse({ ok: true, accepted: true, deferred: true });
+      return false;
+    }
+
     if (
       message.type === 'EXECUTE_STEP'
-      || message.type === 'FILL_CODE'
       || message.type === 'STEP8_FIND_AND_CLICK'
       || message.type === 'STEP8_GET_STATE'
       || message.type === 'STEP8_TRIGGER_CONTINUE'
       || message.type === 'GET_LOGIN_AUTH_STATE'
+      || message.type === 'GET_VERIFICATION_SUBMIT_OUTCOME'
       || message.type === 'PREPARE_SIGNUP_VERIFICATION'
       || message.type === 'RECOVER_AUTH_RETRY_PAGE'
       || message.type === 'RESEND_VERIFICATION_CODE'
@@ -65,11 +72,10 @@ async function handleCommand(message) {
         case 9: return await step8_findAndClick(message.payload);
         default: throw new Error(`signup-page.js 不处理步骤 ${message.step}`);
       }
-    case 'FILL_CODE':
-      // Step 4 = signup code, Step 7 = login code (same handler)
-      return await fillVerificationCode(message.step, message.payload);
     case 'GET_LOGIN_AUTH_STATE':
       return serializeLoginAuthState(inspectLoginAuthState());
+    case 'GET_VERIFICATION_SUBMIT_OUTCOME':
+      return getVerificationSubmitOutcomeSnapshot(message.step);
     case 'PREPARE_SIGNUP_VERIFICATION':
       return await prepareSignupVerificationFlow(message.payload);
     case 'RECOVER_AUTH_RETRY_PAGE':
@@ -103,6 +109,7 @@ const VERIFICATION_CODE_INPUT_SELECTOR = [
 const ONE_TIME_CODE_LOGIN_PATTERN = /使用一次性验证码登录|改用(?:一次性)?验证码(?:登录)?|使用验证码登录|一次性验证码|验证码登录|one[-\s]*time\s*(?:passcode|password|code)|use\s+(?:a\s+)?one[-\s]*time\s*(?:passcode|password|code)(?:\s+instead)?|use\s+(?:a\s+)?code(?:\s+instead)?|sign\s+in\s+with\s+(?:email|code)|email\s+(?:me\s+)?(?:a\s+)?code/i;
 
 const RESEND_VERIFICATION_CODE_PATTERN = /重新发送(?:验证码)?|再次发送(?:验证码)?|重发(?:验证码)?|未收到(?:验证码|邮件)|resend(?:\s+code)?|send\s+(?:a\s+)?new\s+code|send\s+(?:it\s+)?again|request\s+(?:a\s+)?new\s+code|didn'?t\s+receive/i;
+let lastVerificationSubmissionState = null;
 
 function isVisibleElement(el) {
   if (!el) return false;
@@ -140,6 +147,52 @@ function getActionText(el) {
     .join(' ')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+function setVerificationSubmissionState(step, patch = {}) {
+  lastVerificationSubmissionState = {
+    ...(lastVerificationSubmissionState || {}),
+    step,
+    updatedAt: Date.now(),
+    ...patch,
+  };
+}
+
+function getVerificationSubmissionState(step) {
+  if (!lastVerificationSubmissionState) return null;
+  if (Number.isFinite(Number(step)) && Number(lastVerificationSubmissionState.step) !== Number(step)) {
+    return null;
+  }
+  return { ...lastVerificationSubmissionState };
+}
+
+function startDetachedVerificationCodeSubmission(message) {
+  const step = Number(message?.step) || 0;
+  const code = String(message?.payload?.code || '');
+  setVerificationSubmissionState(step, {
+    phase: 'queued',
+    error: '',
+    currentValue: '',
+    submitText: '',
+    codeLength: code.length,
+  });
+
+  Promise.resolve()
+    .then(async () => {
+      await fillVerificationCode(step, message.payload);
+    })
+    .catch((error) => {
+      const errorMessage = error?.message || String(error || '验证码提交流程失败');
+      setVerificationSubmissionState(step, {
+        phase: isStopError(error) ? 'stopped' : 'failed',
+        error: errorMessage,
+      });
+      if (isStopError(error)) {
+        log(`步骤 ${step}：验证码提交流程已停止。`, 'warn');
+        return;
+      }
+      log(`步骤 ${step}：验证码提交流程失败：${errorMessage}`, 'error');
+    });
 }
 
 function isActionEnabled(el) {
@@ -1579,10 +1632,77 @@ async function waitForVerificationSubmitOutcome(step, timeout) {
   return { success: true, assumed: true };
 }
 
+function getVerificationSubmitOutcomeSnapshot(step) {
+  const submissionState = getVerificationSubmissionState(step);
+  if (submissionState?.phase === 'failed') {
+    return {
+      failed: true,
+      error: submissionState.error || '验证码提交流程失败。',
+      phase: submissionState.phase,
+      currentValue: submissionState.currentValue || '',
+      url: location.href,
+    };
+  }
+
+  if (submissionState?.phase === 'stopped') {
+    return {
+      failed: true,
+      stopped: true,
+      error: submissionState.error || STOP_ERROR_MESSAGE,
+      phase: submissionState.phase,
+      url: location.href,
+    };
+  }
+
+  const errorText = getVerificationErrorText();
+  if (errorText) {
+    return {
+      invalidCode: true,
+      errorText,
+      phase: submissionState?.phase || '',
+      currentValue: submissionState?.currentValue || '',
+      url: location.href,
+    };
+  }
+
+  if (step === 4 && isStep5Ready()) {
+    return { success: true, phase: submissionState?.phase || '', url: location.href };
+  }
+
+  if (step === 8 && isStep8Ready()) {
+    return { success: true, phase: submissionState?.phase || '', url: location.href };
+  }
+
+  if (step === 8 && isAddPhonePageReady()) {
+    return {
+      success: true,
+      addPhonePage: true,
+      url: location.href,
+      phase: submissionState?.phase || '',
+    };
+  }
+
+  return {
+    pending: true,
+    verificationVisible: isVerificationPageStillVisible(),
+    retryPage: is405MethodNotAllowedPage(),
+    phase: submissionState?.phase || '',
+    currentValue: submissionState?.currentValue || '',
+    submitText: submissionState?.submitText || '',
+    url: location.href,
+  };
+}
+
 async function fillVerificationCode(step, payload) {
   const { code } = payload;
   if (!code) throw new Error('未提供验证码。');
 
+  setVerificationSubmissionState(step, {
+    phase: 'preparing',
+    error: '',
+    currentValue: '',
+    submitText: '',
+  });
   log(`步骤 ${step}：正在填写验证码：${code}`);
 
   if (step === 8) {
@@ -1599,6 +1719,7 @@ async function fillVerificationCode(step, payload) {
 
     // Before looking for input, check if page is in 405 error state
     if (is405MethodNotAllowedPage()) {
+      setVerificationSubmissionState(step, { phase: 'recovering_405' });
       log(`步骤 ${step}：检测到 405 错误页面，正在恢复...`, 'warn');
       await handle405ResendError(step, 30000);
       continue;
@@ -1609,26 +1730,35 @@ async function fillVerificationCode(step, payload) {
       break; // Found it
     } catch {
       // Check for multiple single-digit inputs (common pattern)
-      const singleInputs = document.querySelectorAll('input[maxlength="1"]');
+      const singleInputs = Array.from(document.querySelectorAll('input[maxlength="1"]'))
+        .filter(isVisibleElement);
       if (singleInputs.length >= 6) {
         log(`步骤 ${step}：发现分开的单字符验证码输入框，正在逐个填写...`);
+        setVerificationSubmissionState(step, { phase: 'filling_split' });
         for (let i = 0; i < 6 && i < singleInputs.length; i++) {
           fillInput(singleInputs[i], code[i]);
           await sleep(100);
         }
-        const outcome = await waitForVerificationSubmitOutcome(step);
-        if (outcome.invalidCode) {
-          log(`步骤 ${step}：验证码被拒绝：${outcome.errorText}`, 'warn');
-        } else if (outcome.addPhonePage) {
-          log(`步骤 ${step}：验证码提交后页面进入手机号页面，当前流程将停止自动授权。`, 'warn');
-        } else {
-          log(`步骤 ${step}：验证码已通过${outcome.assumed ? '（按成功推定）' : ''}。`, 'ok');
-        }
-        return outcome;
+        const currentCodeValue = Array.from(singleInputs)
+          .slice(0, 6)
+          .map((input) => input?.value || '')
+          .join('');
+        log(`步骤 ${step}：验证码输入框当前值：${currentCodeValue}`);
+        setVerificationSubmissionState(step, {
+          phase: 'filled_split_waiting_auto_submit',
+          currentValue: currentCodeValue,
+        });
+        return {
+          accepted: true,
+          deferred: true,
+          inputMode: 'split',
+          currentValue: currentCodeValue,
+        };
       }
 
       // No input found — check if it's a 405 error and can be recovered
       if (is405MethodNotAllowedPage() && retry < maxRetries) {
+        setVerificationSubmissionState(step, { phase: 'recovering_405' });
         log(`步骤 ${step}：未找到验证码输入框且页面出现 405 错误，正在恢复...`, 'warn');
         await handle405ResendError(step, 30000);
         continue;
@@ -1644,11 +1774,14 @@ async function fillVerificationCode(step, payload) {
 
   fillInput(codeInput, code);
   log(`步骤 ${step}：验证码已填写`);
+  log(`步骤 ${step}：验证码输入框当前值：${codeInput.value || ''}`);
+  setVerificationSubmissionState(step, {
+    phase: 'filled',
+    currentValue: codeInput.value || '',
+  });
 
-  // Report complete BEFORE submit (page may navigate away)
-
-  // Submit
-  await sleep(500);
+  await sleep(1000);
+  setVerificationSubmissionState(step, { phase: 'waiting_before_submit' });
   const submitBtn = document.querySelector('button[type="submit"]')
     || await waitForElementByText('button', /verify|confirm|submit|continue|确认|验证/i, 5000).catch(() => null);
 
@@ -1656,18 +1789,25 @@ async function fillVerificationCode(step, payload) {
     await humanPause(450, 1200);
     simulateClick(submitBtn);
     log(`步骤 ${step}：验证码已提交`);
-  }
-
-  const outcome = await waitForVerificationSubmitOutcome(step);
-  if (outcome.invalidCode) {
-    log(`步骤 ${step}：验证码被拒绝：${outcome.errorText}`, 'warn');
-  } else if (outcome.addPhonePage) {
-    log(`步骤 ${step}：验证码提交后页面进入手机号页面，当前流程将停止自动授权。`, 'warn');
+    setVerificationSubmissionState(step, {
+      phase: 'submitted',
+      submitText: getActionText(submitBtn),
+      submittedAt: Date.now(),
+    });
   } else {
-    log(`步骤 ${step}：验证码已通过${outcome.assumed ? '（按成功推定）' : ''}。`, 'ok');
+    log(`步骤 ${step}：未找到明确的验证码提交按钮，等待页面自动提交或状态变化。`, 'warn');
+    setVerificationSubmissionState(step, {
+      phase: 'waiting_auto_submit',
+      submittedAt: Date.now(),
+    });
   }
 
-  return outcome;
+  return {
+    accepted: true,
+    deferred: true,
+    inputMode: 'single',
+    currentValue: codeInput.value || '',
+  };
 }
 
 // ============================================================
