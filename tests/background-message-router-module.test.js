@@ -59,3 +59,35 @@ test('message router step 10 only clears Hero-SMS runtime state and does not fin
   assert.equal(cleanupCalls[0].finish, undefined);
   assert.equal(cleanupCalls[0].state.currentHeroSmsActivationId, 'act-keep');
 });
+
+test('message router routes FETCH_OUTLOOKEMAIL_GROUPS to provider helper', async () => {
+  const source = fs.readFileSync('background/message-router.js', 'utf8');
+  const globalScope = {};
+  const api = new Function('self', `${source}; return self.MultiPageBackgroundMessageRouter;`)(globalScope);
+
+  let fetchCalls = 0;
+  const router = api.createMessageRouter({
+    addLog: async () => {},
+    buildPersistentSettingsPayload: () => ({}),
+    buildLuckmailSessionSettingsPayload: () => ({}),
+    fetchOutlookEmailGroups: async () => {
+      fetchCalls += 1;
+      return [{ id: '1', name: '注册池' }];
+    },
+    getState: async () => ({ stepStatuses: {} }),
+    setPersistentSettings: async () => {},
+    setState: async () => {},
+  });
+
+  const result = await router.handleMessage({
+    type: 'FETCH_OUTLOOKEMAIL_GROUPS',
+    source: 'sidepanel',
+    payload: {},
+  }, {});
+
+  assert.equal(fetchCalls, 1);
+  assert.deepStrictEqual(result, {
+    ok: true,
+    groups: [{ id: '1', name: '注册池' }],
+  });
+});

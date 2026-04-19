@@ -172,6 +172,49 @@ test('signup flow helper reuses existing managed alias email when it is still co
   assert.equal(setEmailCalls, 0);
 });
 
+test('signup flow helper allocates OutlookEmail account when provider is outlookemail-api', async () => {
+  let ensureCalls = 0;
+  const setEmailCalls = [];
+
+  const helpers = signupFlowApi.createSignupFlowHelpers({
+    buildGeneratedAliasEmail: () => '',
+    chrome: { tabs: { get: async () => ({ id: 21, url: 'https://auth.openai.com/create-account/password' }) } },
+    ensureContentScriptReadyOnTab: async () => {},
+    ensureHotmailAccountForFlow: async () => ({}),
+    ensureOutlookEmailAccountForFlow: async (options) => {
+      ensureCalls += 1;
+      assert.equal(options.preferredAccountId, '12');
+      return { id: '12', email: 'pool@example.com' };
+    },
+    ensureLuckmailPurchaseForFlow: async () => ({}),
+    isGeneratedAliasProvider: () => false,
+    isReusableGeneratedAliasEmail: () => false,
+    isHotmailProvider: () => false,
+    isOutlookEmailProvider: (state) => state?.mailProvider === 'outlookemail-api',
+    isLuckmailProvider: () => false,
+    isSignupEmailVerificationPageUrl: () => false,
+    isSignupPasswordPageUrl: () => true,
+    reuseOrCreateTab: async () => 21,
+    sendToContentScriptResilient: async () => ({}),
+    setEmailState: async (email) => {
+      setEmailCalls.push(email);
+    },
+    SIGNUP_ENTRY_URL: 'https://chatgpt.com/',
+    SIGNUP_PAGE_INJECT_FILES: [],
+    waitForTabUrlMatch: async () => null,
+  });
+
+  const email = await helpers.resolveSignupEmailForFlow({
+    mailProvider: 'outlookemail-api',
+    email: '',
+    currentOutlookEmailAccountId: '12',
+  });
+
+  assert.equal(email, 'pool@example.com');
+  assert.equal(ensureCalls, 1);
+  assert.deepStrictEqual(setEmailCalls, ['pool@example.com']);
+});
+
 test('signup flow helper finalizes step 3 submit by reusing signup verification preparation', async () => {
   let ensureCalls = 0;
   const messages = [];

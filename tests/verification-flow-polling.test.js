@@ -45,6 +45,59 @@ test('verification flow extends 2925 polling window', () => {
   assert.equal(step8Payload.intervalMs, 15000);
 });
 
+test('verification flow delegates outlookemail-api polling to OutlookEmail provider helper', async () => {
+  const events = [];
+
+  const helpers = api.createVerificationFlowHelpers({
+    addLog: async () => {},
+    chrome: { tabs: { update: async () => {} } },
+    CLOUDFLARE_TEMP_EMAIL_PROVIDER: 'cloudflare-temp-email',
+    completeStepFromBackground: async () => {},
+    confirmCustomVerificationStepBypassRequest: async () => ({ confirmed: true }),
+    getHotmailVerificationPollConfig: () => ({}),
+    getHotmailVerificationRequestTimestamp: () => 123,
+    getState: async () => ({}),
+    getTabId: async () => 1,
+    HOTMAIL_PROVIDER: 'hotmail-api',
+    isStopError: () => false,
+    LUCKMAIL_PROVIDER: 'luckmail-api',
+    MAIL_2925_VERIFICATION_INTERVAL_MS: 15000,
+    MAIL_2925_VERIFICATION_MAX_ATTEMPTS: 15,
+    pollCloudflareTempEmailVerificationCode: async () => ({}),
+    pollHotmailVerificationCode: async () => ({}),
+    pollLuckmailVerificationCode: async () => ({}),
+    pollOutlookEmailVerificationCode: async (step, state, payload) => {
+      events.push({ step, state, payload });
+      return {
+        code: '112233',
+        emailTimestamp: 456,
+      };
+    },
+    sendToContentScript: async () => ({}),
+    sendToMailContentScriptResilient: async () => {
+      throw new Error('should not call mail content script for OutlookEmail provider');
+    },
+    setState: async () => {},
+    setStepStatus: async () => {},
+    sleepWithStop: async () => {},
+    throwIfStopped: () => {},
+    VERIFICATION_POLL_MAX_ROUNDS: 5,
+  });
+
+  const result = await helpers.pollFreshVerificationCode(
+    4,
+    { email: 'pool@example.com', mailProvider: 'outlookemail-api' },
+    { provider: 'outlookemail-api', label: 'OutlookEmail（邮箱池）' },
+    { intervalMs: 2000, maxAttempts: 4 }
+  );
+
+  assert.equal(result.code, '112233');
+  assert.equal(events.length, 1);
+  assert.equal(events[0].step, 4);
+  assert.equal(events[0].state.mailProvider, 'outlookemail-api');
+  assert.equal(events[0].payload.intervalMs, 2000);
+});
+
 test('verification flow runs beforeSubmit hook before filling the code', async () => {
   const events = [];
 

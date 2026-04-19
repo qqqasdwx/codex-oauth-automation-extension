@@ -31,8 +31,10 @@
       executeStepViaCompletionSignal,
       exportSettingsBundle,
       fetchGeneratedEmail,
+      fetchOutlookEmailGroups,
       finalizeStep3Completion,
       finalizeIcloudAliasAfterSuccessfulFlow,
+      finalizeOutlookEmailAfterSuccessfulFlow,
       findHotmailAccount,
       flushCommand,
       getCurrentLuckmailPurchase,
@@ -48,6 +50,7 @@
       isHotmailProvider,
       isLocalhostOAuthCallbackUrl,
       isLuckmailProvider,
+      isOutlookEmailProvider,
       isStopError,
       launchAutoRunTimerPlan,
       listIcloudAliases,
@@ -189,6 +192,16 @@
             }
             await clearLuckmailRuntimeState({ clearEmail: true });
             await addLog('当前 LuckMail 邮箱运行态已清空，下轮将优先复用未用邮箱或重新购买邮箱。', 'ok');
+          }
+          if (isOutlookEmailProvider?.(latestState) && typeof finalizeOutlookEmailAfterSuccessfulFlow === 'function') {
+            try {
+              const movedAccount = await finalizeOutlookEmailAfterSuccessfulFlow(latestState);
+              if (movedAccount?.email) {
+                await addLog(`当前 OutlookEmail 邮箱 ${movedAccount.email} 已移动到注册成功分组。`, 'ok');
+              }
+            } catch (error) {
+              await addLog(`OutlookEmail 成功移组失败：${error?.message || error}`, 'warn');
+            }
           }
           const localhostPrefix = buildLocalhostCleanupPrefix(payload.localhostUrl);
           if (localhostPrefix) {
@@ -427,6 +440,11 @@
             ...sessionUpdates,
           });
           return { ok: true, state: await getState() };
+        }
+
+        case 'FETCH_OUTLOOKEMAIL_GROUPS': {
+          const groups = await fetchOutlookEmailGroups();
+          return { ok: true, groups };
         }
 
         case 'EXPORT_SETTINGS': {

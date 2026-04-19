@@ -12,6 +12,7 @@
       HOTMAIL_PROVIDER,
       isTabAlive,
       LUCKMAIL_PROVIDER,
+      OUTLOOK_EMAIL_PROVIDER = 'outlookemail-api',
       CLOUDFLARE_TEMP_EMAIL_PROVIDER,
       resolveVerificationStep,
       reuseOrCreateTab,
@@ -66,7 +67,12 @@
       }
 
       throwIfStopped();
-      if (mail.provider === HOTMAIL_PROVIDER || mail.provider === LUCKMAIL_PROVIDER || mail.provider === CLOUDFLARE_TEMP_EMAIL_PROVIDER) {
+      if (
+        mail.provider === HOTMAIL_PROVIDER
+        || mail.provider === LUCKMAIL_PROVIDER
+        || mail.provider === OUTLOOK_EMAIL_PROVIDER
+        || mail.provider === CLOUDFLARE_TEMP_EMAIL_PROVIDER
+      ) {
         await addLog(`步骤 4：正在通过 ${mail.label} 轮询验证码...`);
       } else {
         await addLog(`步骤 4：正在打开${mail.label}...`);

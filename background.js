@@ -6,6 +6,7 @@ importScripts(
   'background/account-run-history.js',
   'background/panel-bridge.js',
   'background/generated-email-helpers.js',
+  'background/outlook-email-provider.js',
   'background/signup-flow-helpers.js',
   'background/message-router.js',
   'background/verification-flow.js',
@@ -28,6 +29,7 @@ importScripts(
   'background/steps/platform-verify.js',
   'data/names.js',
   'hotmail-utils.js',
+  'outlook-email-utils.js',
   'microsoft-email.js',
   'luckmail-utils.js',
   'cloudflare-temp-email-utils.js',
@@ -58,6 +60,12 @@ const {
   pickVerificationMessageWithTimeFallback,
   shouldClearHotmailCurrentSelection,
 } = self.HotmailUtils;
+const {
+  OUTLOOK_EMAIL_PROVIDER,
+  normalizeOutlookEmailBaseUrl,
+  normalizeOutlookEmailGroupId,
+  normalizeOutlookEmailGroups,
+} = self.OutlookEmailUtils;
 const {
   fetchMicrosoftMailboxMessages,
 } = self.MultiPageMicrosoftEmail;
@@ -133,6 +141,7 @@ const ICLOUD_LOGIN_URLS = [
 ];
 const ICLOUD_PROVIDER = 'icloud';
 const GMAIL_PROVIDER = 'gmail';
+const OUTLOOK_EMAIL_PROVIDER_KEY = OUTLOOK_EMAIL_PROVIDER || 'outlookemail-api';
 const HOTMAIL_PROVIDER = 'hotmail-api';
 const LUCKMAIL_PROVIDER = 'luckmail-api';
 const CLOUDFLARE_TEMP_EMAIL_PROVIDER = 'cloudflare-temp-email';
@@ -171,6 +180,7 @@ const DEFAULT_LOCAL_CPA_STEP9_MODE = 'submit';
 const MAIL_2925_MODE_PROVIDE = 'provide';
 const MAIL_2925_MODE_RECEIVE = 'receive';
 const DEFAULT_MAIL_2925_MODE = MAIL_2925_MODE_PROVIDE;
+const DEFAULT_OUTLOOK_EMAIL_BASE_URL = '';
 const HOTMAIL_SERVICE_MODE_REMOTE = 'remote';
 const HOTMAIL_SERVICE_MODE_LOCAL = 'local';
 const DEFAULT_HOTMAIL_REMOTE_BASE_URL = '';
@@ -239,6 +249,11 @@ const PERSISTED_SETTING_DEFAULTS = {
   mailProvider: '163',
   mail2925Mode: DEFAULT_MAIL_2925_MODE,
   emailGenerator: 'duck',
+  outlookEmailBaseUrl: DEFAULT_OUTLOOK_EMAIL_BASE_URL,
+  outlookEmailPassword: '',
+  outlookEmailSourceGroupId: '',
+  outlookEmailSuccessGroupId: '',
+  outlookEmailGroups: [],
   autoDeleteUsedIcloudAlias: false,
   icloudHostPreference: 'auto',
   accountRunHistoryTextEnabled: false,
@@ -316,6 +331,8 @@ const DEFAULT_STATE = {
   luckmailPreserveTagName: DEFAULT_LUCKMAIL_PRESERVE_TAG_NAME,
   currentLuckmailPurchase: null,
   currentLuckmailMailCursor: null,
+  outlookEmailAccounts: [],
+  outlookEmailUsedAccountIds: [],
   autoRunning: false, // 当前是否处于自动运行中。
   autoRunPhase: 'idle', // 当前自动运行阶段。
   autoRunCurrentRun: 0, // 自动运行当前执行到第几轮。
@@ -332,6 +349,7 @@ const DEFAULT_STATE = {
   loginVerificationRequestedAt: null,
   oauthFlowDeadlineAt: null,
   currentHotmailAccountId: null,
+  currentOutlookEmailAccountId: null,
   preferredIcloudHost: '',
   currentHeroSmsActivationId: null,
   currentHeroSmsPhoneNumber: null,
@@ -635,6 +653,7 @@ function normalizeMailProvider(value = '') {
     case 'custom':
     case ICLOUD_PROVIDER:
     case GMAIL_PROVIDER:
+    case OUTLOOK_EMAIL_PROVIDER_KEY:
     case HOTMAIL_PROVIDER:
     case LUCKMAIL_PROVIDER:
     case CLOUDFLARE_TEMP_EMAIL_PROVIDER:
@@ -882,6 +901,15 @@ function normalizePersistentSettingValue(key, value) {
     case 'mail2925BaseEmail':
     case 'emailPrefix':
       return String(value || '').trim();
+    case 'outlookEmailBaseUrl':
+      return normalizeOutlookEmailBaseUrl(value);
+    case 'outlookEmailPassword':
+      return String(value || '');
+    case 'outlookEmailSourceGroupId':
+    case 'outlookEmailSuccessGroupId':
+      return normalizeOutlookEmailGroupId(value);
+    case 'outlookEmailGroups':
+      return normalizeOutlookEmailGroups(value);
     case 'inbucketHost':
       return String(value || '').trim();
     case 'inbucketMailbox':
@@ -1089,6 +1117,9 @@ async function importSettingsBundle(configBundle) {
   const sessionUpdates = {
     ...importedSettings,
     currentHotmailAccountId: null,
+    currentOutlookEmailAccountId: null,
+    outlookEmailAccounts: [],
+    outlookEmailUsedAccountIds: [],
     email: null,
   };
 
@@ -1096,6 +1127,7 @@ async function importSettingsBundle(configBundle) {
   broadcastDataUpdate({
     ...importedSettings,
     currentHotmailAccountId: null,
+    currentOutlookEmailAccountId: null,
     ...(sessionUpdates.email !== undefined ? { email: sessionUpdates.email } : {}),
   });
 
@@ -1393,6 +1425,13 @@ function isLuckmailProvider(stateOrProvider) {
     ? stateOrProvider
     : stateOrProvider?.mailProvider;
   return provider === LUCKMAIL_PROVIDER;
+}
+
+function isOutlookEmailProvider(stateOrProvider) {
+  const provider = typeof stateOrProvider === 'string'
+    ? stateOrProvider
+    : stateOrProvider?.mailProvider;
+  return provider === OUTLOOK_EMAIL_PROVIDER_KEY;
 }
 
 function isCustomMailProvider(stateOrProvider) {
@@ -3884,6 +3923,42 @@ const phoneVerificationHelpers = self.MultiPageBackgroundPhoneVerification?.crea
   throwIfStopped,
 });
 
+const outlookEmailProviderHelpers = self.MultiPageOutlookEmailProvider?.createOutlookEmailProviderHelpers({
+  addLog,
+  broadcastDataUpdate,
+  fetch,
+  getState,
+  pickVerificationMessageWithTimeFallback,
+  setEmailState,
+  setPersistentSettings,
+  setState,
+  sleepWithStop,
+  throwIfStopped,
+});
+
+function getOutlookEmailProviderHelpers() {
+  if (!outlookEmailProviderHelpers) {
+    throw new Error('OutlookEmail provider helpers 不可用。');
+  }
+  return outlookEmailProviderHelpers;
+}
+
+async function fetchOutlookEmailGroups(...args) {
+  return getOutlookEmailProviderHelpers().fetchOutlookEmailGroups(...args);
+}
+
+async function ensureOutlookEmailAccountForFlow(...args) {
+  return getOutlookEmailProviderHelpers().ensureOutlookEmailAccountForFlow(...args);
+}
+
+async function pollOutlookEmailVerificationCode(...args) {
+  return getOutlookEmailProviderHelpers().pollOutlookEmailVerificationCode(...args);
+}
+
+async function finalizeOutlookEmailAfterSuccessfulFlow(...args) {
+  return getOutlookEmailProviderHelpers().finalizeOutlookEmailAfterSuccessfulFlow(...args);
+}
+
 function isCloudflareSecurityBlockedError(error) {
   return getErrorMessage(error).startsWith(CLOUDFLARE_SECURITY_BLOCK_ERROR_PREFIX);
 }
@@ -5395,6 +5470,15 @@ async function ensureAutoEmailReady(targetRun, totalRuns, attemptRuns) {
     return account.email;
   }
 
+  if (isOutlookEmailProvider(currentState)) {
+    const account = await ensureOutlookEmailAccountForFlow({
+      preferredAccountId: null,
+      syncEmail: true,
+    });
+    await addLog(`=== 目标 ${targetRun}/${totalRuns} 轮：已分配 OutlookEmail 邮箱 ${account.email}（第 ${attemptRuns} 次尝试）===`, 'ok');
+    return account.email;
+  }
+
   if (isLuckmailProvider(currentState)) {
     const purchase = await ensureLuckmailPurchaseForFlow({ allowReuse: true });
     await addLog(`=== 目标 ${targetRun}/${totalRuns} 轮：LuckMail 邮箱已就绪：${purchase.email_address}（第 ${attemptRuns} 次尝试）===`, 'ok');
@@ -5489,6 +5573,15 @@ async function ensureAutoEmailReady(targetRun, totalRuns, attemptRuns) {
       preferredAccountId: null,
     });
     await addLog(`=== 目标 ${targetRun}/${totalRuns} 轮：已分配 Hotmail 账号 ${account.email}（第 ${attemptRuns} 次尝试）===`, 'ok');
+    return account.email;
+  }
+
+  if (isOutlookEmailProvider(currentState)) {
+    const account = await ensureOutlookEmailAccountForFlow({
+      preferredAccountId: null,
+      syncEmail: true,
+    });
+    await addLog(`=== 目标 ${targetRun}/${totalRuns} 轮：已分配 OutlookEmail 邮箱 ${account.email}（第 ${attemptRuns} 次尝试）===`, 'ok');
     return account.email;
   }
 
@@ -5830,12 +5923,14 @@ const signupFlowHelpers = self.MultiPageSignupFlowHelpers?.createSignupFlowHelpe
   chrome,
   ensureContentScriptReadyOnTab,
   ensureHotmailAccountForFlow,
+  ensureOutlookEmailAccountForFlow,
   ensureLuckmailPurchaseForFlow,
   getTabId,
   isGeneratedAliasProvider,
   isReusableGeneratedAliasEmail,
   isSignupEmailVerificationPageUrl,
   isHotmailProvider,
+  isOutlookEmailProvider,
   isLuckmailProvider,
   isSignupPasswordPageUrl,
   isTabAlive,
@@ -5867,6 +5962,7 @@ const verificationFlowHelpers = self.MultiPageBackgroundVerificationFlow?.create
   pollCloudflareTempEmailVerificationCode,
   pollHotmailVerificationCode,
   pollLuckmailVerificationCode,
+  pollOutlookEmailVerificationCode,
   sendToContentScript,
   sendToMailContentScriptResilient,
   setState,
@@ -5915,6 +6011,7 @@ const step4Executor = self.MultiPageBackgroundStep4?.createStep4Executor({
   HOTMAIL_PROVIDER,
   isTabAlive,
   LUCKMAIL_PROVIDER,
+  OUTLOOK_EMAIL_PROVIDER: OUTLOOK_EMAIL_PROVIDER_KEY,
   CLOUDFLARE_TEMP_EMAIL_PROVIDER,
   resolveVerificationStep: verificationFlowHelpers.resolveVerificationStep,
   reuseOrCreateTab,
@@ -5967,6 +6064,7 @@ const step8Executor = self.MultiPageBackgroundStep8?.createStep8Executor({
   isTabAlive,
   isVerificationMailPollingError,
   LUCKMAIL_PROVIDER,
+  OUTLOOK_EMAIL_PROVIDER: OUTLOOK_EMAIL_PROVIDER_KEY,
   resolveVerificationStep: verificationFlowHelpers.resolveVerificationStep,
   reuseOrCreateTab,
   setState,
@@ -6037,6 +6135,7 @@ const messageRouter = self.MultiPageBackgroundMessageRouter?.createMessageRouter
   executeStepViaCompletionSignal,
   exportSettingsBundle,
   fetchGeneratedEmail,
+  fetchOutlookEmailGroups,
   finalizeStep3Completion: async () => {
     const currentState = await getState();
     const signupTabId = await getTabId('signup-page');
@@ -6047,6 +6146,7 @@ const messageRouter = self.MultiPageBackgroundMessageRouter?.createMessageRouter
     );
   },
   finalizeIcloudAliasAfterSuccessfulFlow,
+  finalizeOutlookEmailAfterSuccessfulFlow,
   findHotmailAccount,
   flushCommand,
   getCurrentLuckmailPurchase,
@@ -6063,6 +6163,7 @@ const messageRouter = self.MultiPageBackgroundMessageRouter?.createMessageRouter
   isHotmailProvider,
   isLocalhostOAuthCallbackUrl,
   isLuckmailProvider,
+  isOutlookEmailProvider,
   isStopError,
   launchAutoRunTimerPlan,
   listIcloudAliases,
@@ -6167,8 +6268,14 @@ async function executeStep3(state) {
 
 function getMailConfig(state) {
   const provider = state.mailProvider || 'qq';
+  const outlookEmailProvider = typeof OUTLOOK_EMAIL_PROVIDER_KEY === 'string' && OUTLOOK_EMAIL_PROVIDER_KEY
+    ? OUTLOOK_EMAIL_PROVIDER_KEY
+    : 'outlookemail-api';
   if (provider === 'custom') {
     return { provider: 'custom', label: '自定义邮箱' };
+  }
+  if (provider === outlookEmailProvider) {
+    return { provider: outlookEmailProvider, label: 'OutlookEmail（邮箱池）' };
   }
   if (provider === HOTMAIL_PROVIDER) {
     return { provider: HOTMAIL_PROVIDER, label: 'Hotmail（API对接/本地助手）' };

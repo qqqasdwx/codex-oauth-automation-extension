@@ -107,7 +107,14 @@ const selectTempEmailDomain = document.getElementById('select-temp-email-domain'
 const inputTempEmailDomain = document.getElementById('input-temp-email-domain');
 const btnTempEmailDomainMode = document.getElementById('btn-temp-email-domain-mode');
 const hotmailSection = document.getElementById('hotmail-section');
+const outlookemailSection = document.getElementById('outlookemail-section');
 const luckmailSection = document.getElementById('luckmail-section');
+const inputOutlookEmailBaseUrl = document.getElementById('input-outlookemail-base-url');
+const inputOutlookEmailPassword = document.getElementById('input-outlookemail-password');
+const btnFetchOutlookEmailGroups = document.getElementById('btn-fetch-outlookemail-groups');
+const outlookEmailGroupStatus = document.getElementById('outlookemail-group-status');
+const selectOutlookEmailSourceGroup = document.getElementById('select-outlookemail-source-group');
+const selectOutlookEmailSuccessGroup = document.getElementById('select-outlookemail-success-group');
 const icloudSection = document.getElementById('icloud-section');
 const icloudSummary = document.getElementById('icloud-summary');
 const icloudList = document.getElementById('icloud-list');
@@ -416,6 +423,13 @@ const upsertHotmailAccountInList = window.HotmailUtils?.upsertHotmailAccountInLi
 const filterHotmailAccountsByUsage = window.HotmailUtils?.filterHotmailAccountsByUsage;
 const getHotmailBulkActionLabel = window.HotmailUtils?.getHotmailBulkActionLabel;
 const getHotmailListToggleLabel = window.HotmailUtils?.getHotmailListToggleLabel;
+const OUTLOOK_EMAIL_PROVIDER = window.OutlookEmailUtils?.OUTLOOK_EMAIL_PROVIDER || 'outlookemail-api';
+const normalizeOutlookEmailBaseUrl = window.OutlookEmailUtils?.normalizeOutlookEmailBaseUrl
+  || ((value) => String(value || '').trim());
+const normalizeOutlookEmailGroupId = window.OutlookEmailUtils?.normalizeOutlookEmailGroupId
+  || ((value) => String(value || '').trim());
+const normalizeOutlookEmailGroups = window.OutlookEmailUtils?.normalizeOutlookEmailGroups
+  || ((value) => Array.isArray(value) ? value : []);
 const normalizeLuckmailTimestampValue = window.LuckMailUtils?.normalizeTimestamp
   || ((value) => {
     const timestamp = Date.parse(String(value || ''));
@@ -1332,6 +1346,7 @@ function collectSettingsPayload() {
     vpsUrl: inputVpsUrl.value.trim(),
     vpsPassword: inputVpsPassword.value,
     ...(heroSmsManager?.collectSettingsPayload?.() || {}),
+    ...(outlookEmailManager?.collectSettings?.() || {}),
     localCpaStep9Mode: getSelectedLocalCpaStep9Mode(),
     sub2apiUrl: inputSub2ApiUrl.value.trim(),
     sub2apiEmail: inputSub2ApiEmail.value.trim(),
@@ -1593,7 +1608,10 @@ function applyAutoRunStatus(payload = currentAutoRun) {
   inputRunCount.disabled = currentAutoRun.autoRunning;
   btnAutoRun.disabled = currentAutoRun.autoRunning;
   btnFetchEmail.disabled = locked
-    || isCustomMailProvider();
+    || isCustomMailProvider()
+    || isOutlookEmailProvider()
+    || selectMailProvider.value === 'hotmail-api'
+    || isLuckmailProvider();
   inputEmail.disabled = locked;
   inputAutoSkipFailures.disabled = scheduled;
 
@@ -1631,7 +1649,10 @@ function applyAutoRunStatus(payload = currentAutoRun) {
       setDefaultAutoRunButton();
       inputEmail.disabled = false;
       if (!locked) {
-        btnFetchEmail.disabled = isCustomMailProvider();
+        btnFetchEmail.disabled = isCustomMailProvider()
+          || isOutlookEmailProvider()
+          || selectMailProvider.value === 'hotmail-api'
+          || isLuckmailProvider();
       }
       break;
   }
@@ -1703,6 +1724,7 @@ function applySettingsState(state) {
   inputVpsUrl.value = state?.vpsUrl || '';
   inputVpsPassword.value = state?.vpsPassword || '';
   heroSmsManager?.applySettingsState?.(state);
+  outlookEmailManager?.applySettingsState?.(state);
   setLocalCpaStep9Mode(state?.localCpaStep9Mode);
   selectPanelMode.value = state?.panelMode || 'cpa';
   inputSub2ApiUrl.value = state?.sub2apiUrl || '';
@@ -1711,7 +1733,7 @@ function applySettingsState(state) {
   inputSub2ApiGroup.value = state?.sub2apiGroupName || '';
   inputSub2ApiDefaultProxy.value = state?.sub2apiDefaultProxyName || '';
   const restoredMailProvider = isCustomMailProvider(state?.mailProvider)
-    || [ICLOUD_PROVIDER, 'hotmail-api', GMAIL_PROVIDER, 'luckmail-api', '163', '163-vip', 'qq', 'inbucket', '2925', 'cloudflare-temp-email'].includes(String(state?.mailProvider || '').trim())
+    || [ICLOUD_PROVIDER, OUTLOOK_EMAIL_PROVIDER, 'hotmail-api', GMAIL_PROVIDER, 'luckmail-api', '163', '163-vip', 'qq', 'inbucket', '2925', 'cloudflare-temp-email'].includes(String(state?.mailProvider || '').trim())
     ? String(state?.mailProvider || '163').trim()
     : (String(state?.emailGenerator || '').trim().toLowerCase() === 'custom'
       || String(state?.emailGenerator || '').trim().toLowerCase() === 'manual'
@@ -2093,6 +2115,10 @@ function isLuckmailProvider(provider = selectMailProvider.value) {
   return String(provider || '').trim().toLowerCase() === LUCKMAIL_PROVIDER;
 }
 
+function isOutlookEmailProvider(provider = selectMailProvider.value) {
+  return String(provider || '').trim().toLowerCase() === OUTLOOK_EMAIL_PROVIDER;
+}
+
 function isIcloudMailProvider(provider = selectMailProvider.value) {
   return String(provider || '').trim().toLowerCase() === ICLOUD_PROVIDER;
 }
@@ -2216,6 +2242,23 @@ function getCurrentLuckmailEmail(state = latestState) {
   return String(getCurrentLuckmailPurchase(state)?.email_address || '').trim();
 }
 
+function getOutlookEmailGroups(state = latestState) {
+  return normalizeOutlookEmailGroups(state?.outlookEmailGroups || []);
+}
+
+function getCurrentOutlookEmailAccount(state = latestState) {
+  const currentId = normalizeOutlookEmailGroupId(state?.currentOutlookEmailAccountId);
+  if (!currentId) {
+    return null;
+  }
+  return (Array.isArray(state?.outlookEmailAccounts) ? state.outlookEmailAccounts : [])
+    .find((account) => normalizeOutlookEmailGroupId(account?.id) === currentId) || null;
+}
+
+function getCurrentOutlookEmailEmail(state = latestState) {
+  return String(getCurrentOutlookEmailAccount(state)?.email || '').trim();
+}
+
 function getLuckmailUsedPurchases(state = latestState) {
   const rawValue = state?.luckmailUsedPurchases;
   if (!rawValue || typeof rawValue !== 'object' || Array.isArray(rawValue)) {
@@ -2292,6 +2335,17 @@ function isCurrentEmailManagedByLuckmail(state = latestState) {
   return inputEmailValue === luckmailEmail || stateEmailValue === luckmailEmail;
 }
 
+function isCurrentEmailManagedByOutlookEmail(state = latestState) {
+  const outlookEmail = getCurrentOutlookEmailEmail(state);
+  if (!outlookEmail) {
+    return false;
+  }
+
+  const inputEmailValue = String(inputEmail.value || '').trim();
+  const stateEmailValue = String(state?.email || '').trim();
+  return inputEmailValue === outlookEmail || stateEmailValue === outlookEmail;
+}
+
 function isCurrentEmailManagedByGeneratedAlias(
   provider = latestState?.mailProvider,
   state = latestState,
@@ -2350,11 +2404,12 @@ function updateMailProviderUI() {
   const mail2925Mode = getSelectedMail2925Mode();
   const useGeneratedAlias = usesGeneratedAliasMailProvider(selectMailProvider.value, mail2925Mode);
   const useInbucket = selectMailProvider.value === 'inbucket';
+  const useOutlookEmail = isOutlookEmailProvider();
   const useHotmail = selectMailProvider.value === 'hotmail-api';
   const useLuckmail = isLuckmailProvider();
   const useCustomEmail = isCustomMailProvider();
   const useIcloudProvider = isIcloudMailProvider();
-  const useEmailGenerator = !useHotmail && !useLuckmail && !useGeneratedAlias && !useCustomEmail;
+  const useEmailGenerator = !useOutlookEmail && !useHotmail && !useLuckmail && !useGeneratedAlias && !useCustomEmail;
   const useCloudflareTempEmailProvider = selectMailProvider.value === 'cloudflare-temp-email';
   const aliasUiCopy = useGeneratedAlias ? getManagedAliasProviderUiCopy(selectMailProvider.value) : null;
   const uiCopy = getCurrentRegistrationEmailUiCopy();
@@ -2409,12 +2464,15 @@ function updateMailProviderUI() {
   if (hotmailSection) {
     hotmailSection.style.display = useHotmail ? '' : 'none';
   }
+  if (outlookemailSection) {
+    outlookemailSection.style.display = useOutlookEmail ? '' : 'none';
+  }
   if (luckmailSection) {
     luckmailSection.style.display = useLuckmail ? '' : 'none';
   }
   labelEmailPrefix.textContent = '邮箱前缀';
   inputEmailPrefix.placeholder = '例如 abc';
-  selectEmailGenerator.disabled = useHotmail || useLuckmail || useGeneratedAlias || useCustomEmail;
+  selectEmailGenerator.disabled = useOutlookEmail || useHotmail || useLuckmail || useGeneratedAlias || useCustomEmail;
   if (useGmail) {
     labelEmailPrefix.textContent = 'Gmail 原邮箱';
     inputEmailPrefix.placeholder = '例如 yourname@gmail.com';
@@ -2430,31 +2488,35 @@ function updateMailProviderUI() {
   if (rowHotmailLocalBaseUrl) {
     rowHotmailLocalBaseUrl.style.display = useHotmail && hotmailServiceMode === HOTMAIL_SERVICE_MODE_LOCAL ? '' : 'none';
   }
-  btnFetchEmail.hidden = useHotmail || useLuckmail || useCustomEmail;
-  inputEmail.readOnly = useHotmail || useLuckmail;
-  inputEmail.placeholder = useHotmail
+  btnFetchEmail.hidden = useOutlookEmail || useHotmail || useLuckmail || useCustomEmail;
+  inputEmail.readOnly = useOutlookEmail || useHotmail || useLuckmail;
+  inputEmail.placeholder = useOutlookEmail
+    ? '由 OutlookEmail 邮箱池自动分配'
+    : (useHotmail
     ? '由 Hotmail 账号池自动分配'
     : (useLuckmail
       ? '步骤 3 自动购买 LuckMail 邮箱并回填'
-      : (useGeneratedAlias ? '步骤 3 自动生成 2925 邮箱并回填' : uiCopy.placeholder));
+      : (useGeneratedAlias ? '步骤 3 自动生成 2925 邮箱并回填' : uiCopy.placeholder)));
   if (useGmail && useGeneratedAlias) {
     inputEmail.placeholder = '步骤 3 自动生成 Gmail +tag 邮箱并回填';
   }
-  if (!useHotmail && !useLuckmail) {
+  if (!useOutlookEmail && !useHotmail && !useLuckmail) {
     inputEmail.placeholder = uiCopy.placeholder;
   }
-  btnFetchEmail.disabled = useLuckmail || useCustomEmail || isAutoRunLockedPhase();
+  btnFetchEmail.disabled = useOutlookEmail || useHotmail || useLuckmail || useCustomEmail || isAutoRunLockedPhase();
   if (!btnFetchEmail.disabled) {
     btnFetchEmail.textContent = uiCopy.buttonLabel;
   }
   if (autoHintText) {
-    autoHintText.textContent = useHotmail
+    autoHintText.textContent = useOutlookEmail
+      ? '请先填写 OutlookEmail 服务地址和登录密码，再拉取并选择分组'
+      : (useHotmail
       ? '请先校验并选择一个 Hotmail 账号'
       : (useLuckmail
         ? '步骤 3 会自动购买 LuckMail 邮箱并用于收码'
       : (useGeneratedAlias
         ? '步骤 3 会自动生成邮箱，无需手动获取'
-        : (useCustomEmail ? '请先填写自定义注册邮箱，成功一轮后会自动清空' : `先自动获取${uiCopy.label}，或手动粘贴邮箱后再继续`)));
+        : (useCustomEmail ? '请先填写自定义注册邮箱，成功一轮后会自动清空' : `先自动获取${uiCopy.label}，或手动粘贴邮箱后再继续`))));
   }
   if (autoHintText && useGmail && useGeneratedAlias) {
     autoHintText.textContent = '请先填写 Gmail 原邮箱，步骤 3 会自动生成 Gmail +tag 地址';
@@ -2465,7 +2527,9 @@ function updateMailProviderUI() {
   if (autoHintText && showCloudflareTempEmailReceiveMailbox) {
     autoHintText.textContent = '若注册邮箱会转发到 Cloudflare Temp Email，请在“邮件接收”中填写实际接收转发邮件的邮箱。';
   }
-  if (useHotmail) {
+  if (useOutlookEmail) {
+    inputEmail.value = getCurrentOutlookEmailEmail();
+  } else if (useHotmail) {
     inputEmail.value = getCurrentHotmailEmail();
   } else if (useLuckmail) {
     inputEmail.value = getCurrentLuckmailEmail();
@@ -2768,6 +2832,9 @@ function escapeHtml(text) {
 async function fetchGeneratedEmail(options = {}) {
   const { showFailureToast = true } = options;
   const uiCopy = getCurrentRegistrationEmailUiCopy();
+  if (isOutlookEmailProvider()) {
+    throw new Error('当前邮箱服务为 OutlookEmail 邮箱池，无需手动获取注册邮箱。');
+  }
   if (isCustomMailProvider()) {
     throw new Error('当前邮箱服务为自定义邮箱，请直接填写注册邮箱。');
   }
@@ -2885,6 +2952,39 @@ const renderHotmailAccounts = hotmailManager?.renderHotmailAccounts
 const bindHotmailEvents = hotmailManager?.bindHotmailEvents
   || (() => { });
 bindHotmailEvents();
+
+const outlookEmailManager = window.SidepanelOutlookEmailManager?.createOutlookEmailManager({
+  state: {
+    getLatestState: () => latestState,
+    syncLatestState,
+  },
+  dom: {
+    btnFetchOutlookEmailGroups,
+    inputOutlookEmailBaseUrl,
+    inputOutlookEmailPassword,
+    outlookEmailGroupStatus,
+    selectOutlookEmailSourceGroup,
+    selectOutlookEmailSuccessGroup,
+  },
+  helpers: {
+    escapeHtml,
+    markSettingsDirty,
+    saveSettings,
+    scheduleSettingsAutoSave,
+    showToast,
+  },
+  runtime: {
+    sendMessage: (message) => chrome.runtime.sendMessage(message),
+  },
+  utils: {
+    normalizeOutlookEmailBaseUrl,
+    normalizeOutlookEmailGroupId,
+    normalizeOutlookEmailGroups,
+  },
+});
+const bindOutlookEmailEvents = outlookEmailManager?.bindEvents
+  || (() => { });
+bindOutlookEmailEvents();
 
 const icloudManager = window.SidepanelIcloudManager?.createIcloudManager({
   dom: {
@@ -3222,7 +3322,7 @@ stepsList?.addEventListener('click', async (event) => {
         syncLatestState({ customPassword: inputPassword.value });
       }
       let email = inputEmail.value.trim();
-      if (selectMailProvider.value === 'hotmail-api' || isLuckmailProvider()) {
+      if (selectMailProvider.value === 'hotmail-api' || isLuckmailProvider() || isOutlookEmailProvider()) {
         const response = await chrome.runtime.sendMessage({ type: 'EXECUTE_STEP', source: 'sidepanel', payload: { step } });
         if (response?.error) {
           throw new Error(response.error);
@@ -3271,7 +3371,7 @@ stepsList?.addEventListener('click', async (event) => {
 });
 
 btnFetchEmail.addEventListener('click', async () => {
-  if (selectMailProvider.value === 'hotmail-api' || isLuckmailProvider() || isCustomMailProvider()) {
+  if (selectMailProvider.value === 'hotmail-api' || isLuckmailProvider() || isOutlookEmailProvider() || isCustomMailProvider()) {
     return;
   }
   await fetchGeneratedEmail().catch(() => { });
@@ -3523,6 +3623,7 @@ btnReset.addEventListener('click', async () => {
   syncLatestState({
     stepStatuses: STEP_DEFAULT_STATUSES,
     currentHotmailAccountId: null,
+    currentOutlookEmailAccountId: null,
     currentLuckmailPurchase: null,
     currentLuckmailMailCursor: null,
     email: null,
@@ -3569,7 +3670,7 @@ btnClearLog.addEventListener('click', () => {
 
 // Save settings on change
 inputEmail.addEventListener('change', async () => {
-  if (selectMailProvider.value === 'hotmail-api' || isLuckmailProvider()) {
+  if (selectMailProvider.value === 'hotmail-api' || isLuckmailProvider() || isOutlookEmailProvider()) {
     return;
   }
   const email = inputEmail.value.trim();
@@ -3648,6 +3749,9 @@ selectMailProvider.addEventListener('change', async () => {
   syncManagedAliasBaseEmailDraftFromInput(previousProvider);
   setManagedAliasBaseEmailInputForProvider(nextProvider, latestState);
   updateMailProviderUI();
+  const leavingOutlookEmail = previousProvider === OUTLOOK_EMAIL_PROVIDER
+    && nextProvider !== OUTLOOK_EMAIL_PROVIDER
+    && isCurrentEmailManagedByOutlookEmail();
   const leavingHotmail = previousProvider === 'hotmail-api'
     && nextProvider !== 'hotmail-api'
     && isCurrentEmailManagedByHotmail();
@@ -3659,7 +3763,7 @@ selectMailProvider.addEventListener('change', async () => {
     || (previousProvider === '2925' && normalizeMail2925Mode(previousMail2925Mode) !== getSelectedMail2925Mode())
   ) && usesGeneratedAliasMailProvider(previousProvider, previousMail2925Mode)
     && isCurrentEmailManagedByGeneratedAlias(previousProvider, latestState, previousMail2925Mode);
-  if (leavingHotmail || leavingLuckmail || leavingGeneratedAlias) {
+  if (leavingOutlookEmail || leavingHotmail || leavingLuckmail || leavingGeneratedAlias) {
     await clearRegistrationEmail({ silent: true }).catch(() => { });
   }
   if (nextProvider === LUCKMAIL_PROVIDER) {
@@ -4060,6 +4164,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         localhostUrl: null,
         email: null,
         password: null,
+        currentOutlookEmailAccountId: null,
         stepStatuses: STEP_DEFAULT_STATUSES,
         logs: [],
         scheduledAutoRunAt: null,
@@ -4133,6 +4238,22 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       }
       if (message.payload.cloudflareTempEmailDomain !== undefined || message.payload.cloudflareTempEmailDomains !== undefined) {
         renderCloudflareTempEmailDomainOptions(message.payload.cloudflareTempEmailDomain || latestState?.cloudflareTempEmailDomain || '');
+      }
+      if (
+        message.payload.outlookEmailBaseUrl !== undefined
+        || message.payload.outlookEmailPassword !== undefined
+        || message.payload.outlookEmailSourceGroupId !== undefined
+        || message.payload.outlookEmailSuccessGroupId !== undefined
+      ) {
+        outlookEmailManager?.applySettingsState?.(latestState);
+      }
+      if (message.payload.outlookEmailGroups !== undefined) {
+        outlookEmailManager?.renderGroups?.(latestState);
+      }
+      if (message.payload.currentOutlookEmailAccountId !== undefined || message.payload.outlookEmailAccounts !== undefined) {
+        if (isOutlookEmailProvider()) {
+          inputEmail.value = getCurrentOutlookEmailEmail();
+        }
       }
       if (message.payload.currentHotmailAccountId !== undefined || message.payload.hotmailAccounts !== undefined) {
         renderHotmailAccounts();

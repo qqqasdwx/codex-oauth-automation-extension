@@ -186,6 +186,7 @@
         <div class="data-inline">
           <select id="select-mail-provider" class="data-select">
             <option value="custom">自定义邮箱</option>
+            <option value="outlookemail-api">OutlookEmail（邮箱池）</option>
             <option value="hotmail-api">Hotmail（账号池）</option>
             <option value="luckmail-api">LuckMail（API 购邮）</option>
             <option value="icloud">iCloud 邮箱</option>
@@ -408,6 +409,40 @@
       </div>
       <div id="hotmail-list-shell" class="hotmail-list-shell is-collapsed">
         <div id="hotmail-accounts-list" class="hotmail-accounts-list"></div>
+      </div>
+    </div>
+    <div id="outlookemail-section" class="data-card hotmail-card" style="display:none;">
+      <div class="section-mini-header">
+        <div class="section-mini-copy">
+          <span class="section-label">OutlookEmail 邮箱池</span>
+        </div>
+      </div>
+      <div class="data-row" id="row-outlookemail-base-url">
+        <span class="data-label">服务地址</span>
+        <input type="text" id="input-outlookemail-base-url" class="data-input mono" placeholder="http://127.0.0.1:5000" />
+      </div>
+      <div class="data-row" id="row-outlookemail-password">
+        <span class="data-label">登录密码</span>
+        <input type="password" id="input-outlookemail-password" class="data-input" placeholder="outlookEmail Web 登录密码" />
+      </div>
+      <div class="data-row" id="row-outlookemail-groups">
+        <span class="data-label">分组列表</span>
+        <div class="data-inline data-value-actions">
+          <button id="btn-fetch-outlookemail-groups" class="btn btn-outline btn-sm data-inline-btn" type="button">拉取分组</button>
+          <span id="outlookemail-group-status" class="data-value data-value-fill truncate">未拉取分组</span>
+        </div>
+      </div>
+      <div class="data-row" id="row-outlookemail-source-group">
+        <span class="data-label">邮箱池分组</span>
+        <select id="select-outlookemail-source-group" class="data-select">
+          <option value="">请选择注册邮箱池分组</option>
+        </select>
+      </div>
+      <div class="data-row" id="row-outlookemail-success-group">
+        <span class="data-label">成功分组</span>
+        <select id="select-outlookemail-success-group" class="data-select">
+          <option value="">请选择注册成功分组</option>
+        </select>
       </div>
     </div>
     <div id="luckmail-section" class="data-card luckmail-card" style="display:none;">
@@ -644,10 +679,12 @@
   <script src="../managed-alias-utils.js"></script>
   <script src="../icloud-utils.js"></script>
   <script src="../hotmail-utils.js"></script>
+  <script src="../outlook-email-utils.js"></script>
   <script src="../luckmail-utils.js"></script>
   <script src="../data/step-definitions.js"></script>
   <script src="update-service.js"></script>
   <script src="hotmail-manager.js"></script>
+  <script src="outlook-email-manager.js"></script>
   <script src="icloud-manager.js"></script>
   <script src="luckmail-manager.js"></script>
   <script src="hero-sms-manager.js"></script>

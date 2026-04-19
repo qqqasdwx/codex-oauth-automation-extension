@@ -7,10 +7,12 @@
       chrome,
       ensureContentScriptReadyOnTab,
       ensureHotmailAccountForFlow,
+      ensureOutlookEmailAccountForFlow,
       ensureLuckmailPurchaseForFlow,
       isGeneratedAliasProvider,
       isReusableGeneratedAliasEmail,
       isHotmailProvider,
+      isOutlookEmailProvider,
       isLuckmailProvider,
       isSignupEmailVerificationPageUrl,
       isSignupPasswordPageUrl,
@@ -192,6 +194,12 @@
           allowAllocate: true,
           markUsed: true,
           preferredAccountId: state.currentHotmailAccountId || null,
+        });
+        resolvedEmail = account.email;
+      } else if (isOutlookEmailProvider?.(state)) {
+        const account = await ensureOutlookEmailAccountForFlow({
+          preferredAccountId: state.currentOutlookEmailAccountId || null,
+          syncEmail: true,
         });
         resolvedEmail = account.email;
       } else if (isLuckmailProvider(state)) {

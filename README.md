@@ -2,7 +2,7 @@
 
 一个用于批量跑通 ChatGPT OAuth 注册/登录流程的 Chrome 扩展。
 
-当前版本基于侧边栏控制，支持单步执行、整套自动执行、停止当前流程、保存常用配置，以及通过 DuckDuckGo / QQ / 163 / Inbucket / Hotmail 协助获取验证码。
+当前版本基于侧边栏控制，支持单步执行、整套自动执行、停止当前流程、保存常用配置，以及通过 DuckDuckGo / QQ / 163 / Inbucket / Hotmail / OutlookEmail 协助获取验证码。
 
 ## 插件效果
 
@@ -52,6 +52,7 @@
 - 支持自定义密码；留空时自动生成强密码
 - 自动显示当前使用中的密码，便于后续保存
 - 自动获取注册验证码与登录验证码
+- 支持 `OutlookEmail（邮箱池）`：通过已部署的 OutlookEmail Web 服务登录、拉分组、自动分配邮箱，并在注册成功后自动移到成功分组
 - 支持 `Hotmail`：继续使用 `邮箱 + 客户端 ID + 刷新令牌（refresh token）`，并可在远程服务与本地助手两种模式间切换
 - 支持 `QQ Mail`、`163 Mail`、`Inbucket mailbox`
 - 支持从 DuckDuckGo Email Protection 自动生成新的 `@duck.com` 地址
@@ -75,8 +76,10 @@
 - 至少准备一种验证码接收方式：
   - DuckDuckGo `@duck.com` + QQ / 163 / Inbucket 转发
   - Cloudflare 自定义域邮箱前缀 + QQ / 163 / Inbucket 转发
+  - OutlookEmail 邮箱池
   - 手动填写一个可收信邮箱
 - 如果使用 `QQ` / `163` / `Inbucket`，对应页面需要提前能正常打开
+- 如果使用 `OutlookEmail`，需要准备可访问的 OutlookEmail Web 服务地址与登录密码
 - 如果需要自动过手机号验证，需要准备可用的 `Hero-SMS API Key` 与国家代码
 
 ## 安装
@@ -140,6 +143,17 @@
 4. 通过后再执行步骤或 `Auto`
 5. 当前项目中，`Mail = Hotmail` 时会直接使用账号池里的邮箱作为注册邮箱，不再走 `Duck / Cloudflare` 自动生成
 
+### 方案 D：`OutlookEmail 邮箱池`
+
+1. `Mail` 选择 `OutlookEmail（邮箱池）`
+2. 填写 `OutlookEmail Base URL` 与 `OutlookEmail 登录密码`
+3. 点击 `拉取分组`
+4. 选择：
+   - `邮箱池分组`
+   - `成功分组`
+5. 之后执行步骤或 `Auto`
+6. 当前项目中，`Mail = OutlookEmail` 时会直接从所选源分组自动分配邮箱，成功后自动移到成功分组
+
 ## 侧边栏配置说明
 
 ### `CPA`
@@ -165,8 +179,9 @@ Step 1 和 Step 10 都依赖这个地址。
 
 ### `Mail`
 
-支持五种验证码来源：
+支持六种验证码来源：
 
+- `OutlookEmail（邮箱池）`
 - `Hotmail`
 - `163 Mail`
 - `163 VIP Mail`
@@ -175,9 +190,30 @@ Step 1 和 Step 10 都依赖这个地址。
 
 说明：
 
+- `OutlookEmail` 通过你已部署的 Web 服务登录，拉取分组后从邮箱池自动分配账号，并在流程成功后自动移到成功分组
 - `Hotmail` 通过侧边栏里的 Hotmail 账号池选择账号，可切换为远程服务模式或本地助手模式
 - `QQ`、`163`、`163 VIP` 用于直接轮询网页邮箱
 - `Inbucket` 通过你在侧边栏里配置的 host 访问 `mailbox` 页面：`https://<your-inbucket-host>/m/<mailbox>/`
+
+### `OutlookEmail 邮箱池`
+
+仅当 `Mail = OutlookEmail（邮箱池）` 时使用。
+
+可配置项：
+
+- `OutlookEmail Base URL`
+- `OutlookEmail 登录密码`
+- `邮箱池分组`
+- `成功分组`
+
+使用方式：
+
+- 先填写服务地址与登录密码
+- 点击 `拉取分组`
+- 选择源分组和成功分组
+- Step 2 前会自动从源分组拉取可用邮箱
+- Step 4 / 8 会通过 OutlookEmail 邮件接口轮询验证码
+- Step 10 成功后会自动把当前邮箱移到成功分组
 
 ### `Hotmail 账号池`
 
