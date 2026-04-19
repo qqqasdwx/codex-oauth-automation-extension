@@ -74,6 +74,7 @@ let autoRunCurrentRun = 2;
 let autoRunTotalRuns = 3;
 let autoRunAttemptRun = 4;
 let autoRunSessionId = 99;
+let heroSmsCleanupCalls = 0;
 const AUTO_RUN_TIMER_KIND_SCHEDULED_START = 'scheduled_start';
 const STEP8_CLICK_RETRY_DELAY_MS = 500;
 const STEP8_MAX_ROUNDS = 5;
@@ -137,6 +138,11 @@ async function addLog() {}
 async function broadcastStopToContentScripts() {}
 async function markRunningStepsStopped() {}
 async function broadcastAutoRunStatus() {}
+const phoneVerificationHelpers = {
+  async cleanupHeroSmsActivation() {
+    heroSmsCleanupCalls += 1;
+  },
+};
 async function getState() {
   return { autoRunning: false };
 }
@@ -261,6 +267,7 @@ return {
       clickCount,
       autoRunActive,
       autoRunSessionId,
+      heroSmsCleanupCalls,
     };
   },
 };
@@ -293,6 +300,7 @@ return {
   assert.strictEqual(state.step8TabUpdatedListener, null, 'Stop 后 tabs.onUpdated 引用应为空');
   assert.strictEqual(state.step8PendingReject, null, 'Stop 后不应保留 Step 8 挂起 reject');
   assert.strictEqual(state.autoRunSessionId, 0, 'Stop 后自动运行 session 应失效');
+  assert.strictEqual(state.heroSmsCleanupCalls, 1, 'Stop 后应清理 Hero-SMS 运行态');
 
   console.log('step8 stop cleanup tests passed');
 })().catch((error) => {

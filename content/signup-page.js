@@ -62,7 +62,7 @@ async function handleCommand(message) {
         case 3: return await step3_fillEmailPassword(message.payload);
         case 5: return await step5_fillNameBirthday(message.payload);
         case 7: return await step6_login(message.payload);
-        case 9: return await step8_findAndClick();
+        case 9: return await step8_findAndClick(message.payload);
         default: throw new Error(`signup-page.js 不处理步骤 ${message.step}`);
       }
     case 'FILL_CODE':
@@ -81,7 +81,7 @@ async function handleCommand(message) {
     case 'ENSURE_SIGNUP_PASSWORD_PAGE_READY':
       return await ensureSignupPasswordPageReady();
     case 'STEP8_FIND_AND_CLICK':
-      return await step8_findAndClick();
+      return await step8_findAndClick(message.payload);
     case 'STEP8_GET_STATE':
       return getStep8State();
     case 'STEP8_TRIGGER_CONTINUE':
@@ -2035,10 +2035,14 @@ async function step6_login(payload) {
 // "使用 ChatGPT 登录到 Codex" with a "继续" submit button.
 // Background performs the actual click through the debugger Input API.
 
-async function step8_findAndClick() {
-  log('步骤 9：正在查找 OAuth 同意页的“继续”按钮...');
+async function step8_findAndClick(payload = {}) {
+  log('步骤 9：正在查找当前页面的“继续”按钮...');
 
-  const continueBtn = await prepareStep8ContinueButton();
+  const continueBtn = await prepareStep8ContinueButton({
+    findTimeoutMs: payload?.findTimeoutMs,
+    enabledTimeoutMs: payload?.enabledTimeoutMs,
+    allowVerificationPage: Boolean(payload?.allowVerificationPage),
+  });
 
   const rect = getSerializableRect(continueBtn);
   log('步骤 9：已找到“继续”按钮并准备好调试器点击坐标。');
@@ -2052,12 +2056,14 @@ async function step8_findAndClick() {
 function getStep8State() {
   const continueBtn = getPrimaryContinueButton();
   const retryState = getCurrentAuthRetryPageState('auth');
+  const pageText = getPageTextSnapshot();
   const state = {
     url: location.href,
     consentPage: isOAuthConsentPage(),
     consentReady: isStep8Ready(),
     verificationPage: isVerificationPageStillVisible(),
     addPhonePage: isAddPhonePageReady(),
+    phoneMaxUsageExceeded: /phone[_\s-]*max[_\s-]*usage[_\s-]*exceeded/i.test(pageText),
     retryPage: Boolean(retryState),
     retryEnabled: Boolean(retryState?.retryEnabled),
     retryTitleMatched: Boolean(retryState?.titleMatched),
@@ -2081,9 +2087,11 @@ function getStep8State() {
 
 async function step8_triggerContinue(payload = {}) {
   const strategy = payload?.strategy || 'requestSubmit';
+  const logStep = Number(payload?.logStep) || 8;
   const continueBtn = await prepareStep8ContinueButton({
     findTimeoutMs: payload?.findTimeoutMs,
     enabledTimeoutMs: payload?.enabledTimeoutMs,
+    allowVerificationPage: Boolean(payload?.allowVerificationPage),
   });
   const form = continueBtn.form || continueBtn.closest('form');
 
@@ -2104,7 +2112,7 @@ async function step8_triggerContinue(payload = {}) {
       throw new Error(`未知的 Step 9 触发策略：${strategy}`);
   }
 
-  log(`Step 9: continue button triggered via ${strategy}.`);
+  log(`步骤 ${logStep}：已通过 ${strategy} 触发 Continue。`);
   return {
     strategy,
     ...getStep8State(),
@@ -2115,9 +2123,10 @@ async function prepareStep8ContinueButton(options = {}) {
   const {
     findTimeoutMs = 10000,
     enabledTimeoutMs = 8000,
+    allowVerificationPage = false,
   } = options;
 
-  const continueBtn = await findContinueButton(findTimeoutMs);
+  const continueBtn = await findContinueButton(findTimeoutMs, { allowVerificationPage });
   await waitForButtonEnabled(continueBtn, enabledTimeoutMs);
 
   await humanPause(250, 700);
@@ -2127,21 +2136,28 @@ async function prepareStep8ContinueButton(options = {}) {
   return continueBtn;
 }
 
-async function findContinueButton(timeout = 10000) {
+async function findContinueButton(timeout = 10000, options = {}) {
+  const allowVerificationPage = Boolean(options?.allowVerificationPage);
   const start = Date.now();
   while (Date.now() - start < timeout) {
     throwIfStopped();
-    if (isAddPhonePageReady()) {
+    if (allowVerificationPage && isVerificationPageStillVisible()) {
+      const verificationButton = getPrimaryContinueButton();
+      if (verificationButton) {
+        return verificationButton;
+      }
+    }
+    if (isAddPhonePageReady() && !allowVerificationPage) {
       throw new Error('当前页面已进入手机号页面，不是 OAuth 授权同意页。URL: ' + location.href);
     }
     const button = getPrimaryContinueButton();
-    if (button && isStep8Ready()) {
+    if (button && (isStep8Ready() || (allowVerificationPage && isVerificationPageStillVisible()))) {
       return button;
     }
     await sleep(150);
   }
 
-  throw new Error('在 OAuth 同意页未找到“继续”按钮，或页面尚未进入授权同意状态。URL: ' + location.href);
+  throw new Error(`${allowVerificationPage ? '在验证码页或 OAuth 同意页' : '在 OAuth 同意页'}未找到“继续”按钮，或页面尚未进入授权同意状态。URL: ${location.href}`);
 }
 
 async function waitForButtonEnabled(button, timeout = 8000) {

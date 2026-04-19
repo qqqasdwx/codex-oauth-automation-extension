@@ -237,6 +237,77 @@ test('verification flow treats add-phone after login code submit as fatal instea
   ]);
 });
 
+test('verification flow allows step 8 to branch into phone verification when explicitly enabled', async () => {
+  const events = [];
+
+  const helpers = api.createVerificationFlowHelpers({
+    addLog: async () => {},
+    chrome: {
+      tabs: {
+        update: async () => {},
+      },
+    },
+    CLOUDFLARE_TEMP_EMAIL_PROVIDER: 'cloudflare-temp-email',
+    completeStepFromBackground: async (_step, payload) => {
+      events.push(['complete', payload.branch, payload.addPhonePage, payload.code]);
+    },
+    confirmCustomVerificationStepBypassRequest: async () => ({ confirmed: true }),
+    getHotmailVerificationPollConfig: () => ({}),
+    getHotmailVerificationRequestTimestamp: () => 0,
+    getState: async () => ({}),
+    getTabId: async () => 1,
+    HOTMAIL_PROVIDER: 'hotmail-api',
+    isStopError: () => false,
+    LUCKMAIL_PROVIDER: 'luckmail-api',
+    MAIL_2925_VERIFICATION_INTERVAL_MS: 15000,
+    MAIL_2925_VERIFICATION_MAX_ATTEMPTS: 15,
+    pollCloudflareTempEmailVerificationCode: async () => ({}),
+    pollHotmailVerificationCode: async () => ({}),
+    pollLuckmailVerificationCode: async () => ({}),
+    sendToContentScript: async (_source, message) => {
+      if (message.type === 'FILL_CODE') {
+        events.push(['submit', message.payload.code]);
+        return {
+          addPhonePage: true,
+          url: 'https://auth.openai.com/add-phone',
+        };
+      }
+      return {};
+    },
+    sendToMailContentScriptResilient: async () => ({
+      code: '654321',
+      emailTimestamp: 123,
+    }),
+    setState: async (payload) => {
+      events.push(['state', payload.lastLoginCode || payload.lastSignupCode]);
+    },
+    setStepStatus: async () => {},
+    sleepWithStop: async () => {},
+    throwIfStopped: () => {},
+    VERIFICATION_POLL_MAX_ROUNDS: 5,
+  });
+
+  const result = await helpers.resolveVerificationStep(
+    8,
+    { email: 'user@example.com', lastLoginCode: null },
+    { provider: 'qq', label: 'QQ 邮箱' },
+    { allowAddPhoneSuccess: true }
+  );
+
+  assert.deepStrictEqual(result, {
+    branch: 'phone_verification',
+    addPhonePage: true,
+    url: 'https://auth.openai.com/add-phone',
+    code: '654321',
+    emailTimestamp: 123,
+  });
+  assert.deepStrictEqual(events, [
+    ['submit', '654321'],
+    ['state', '654321'],
+    ['complete', 'phone_verification', true, '654321'],
+  ]);
+});
+
 test('verification flow caps mail polling timeout to the remaining oauth budget', async () => {
   const mailPollCalls = [];
 

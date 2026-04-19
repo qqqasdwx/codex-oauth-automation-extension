@@ -68,6 +68,14 @@ const rowVpsUrl = document.getElementById('row-vps-url');
 const inputVpsUrl = document.getElementById('input-vps-url');
 const rowVpsPassword = document.getElementById('row-vps-password');
 const inputVpsPassword = document.getElementById('input-vps-password');
+const rowHeroSmsEnabled = document.getElementById('row-hero-sms-enabled');
+const heroSmsEnabledButtons = Array.from(document.querySelectorAll('[data-hero-sms-enabled]'));
+const rowHeroSmsApiKey = document.getElementById('row-hero-sms-api-key');
+const inputHeroSmsApiKey = document.getElementById('input-hero-sms-api-key');
+const btnToggleHeroSmsApiKey = document.getElementById('btn-toggle-hero-sms-api-key');
+const rowHeroSmsCountry = document.getElementById('row-hero-sms-country');
+const inputHeroSmsCountry = document.getElementById('input-hero-sms-country');
+const btnQueryHeroSmsCountries = document.getElementById('btn-query-hero-sms-countries');
 const rowLocalCpaStep9Mode = document.getElementById('row-local-cpa-step9-mode');
 const localCpaStep9ModeButtons = Array.from(document.querySelectorAll('[data-local-cpa-step9-mode]'));
 const rowSub2ApiUrl = document.getElementById('row-sub2api-url');
@@ -1315,6 +1323,7 @@ function collectSettingsPayload() {
     panelMode: selectPanelMode.value,
     vpsUrl: inputVpsUrl.value.trim(),
     vpsPassword: inputVpsPassword.value,
+    ...(heroSmsManager?.collectSettingsPayload?.() || {}),
     localCpaStep9Mode: getSelectedLocalCpaStep9Mode(),
     sub2apiUrl: inputSub2ApiUrl.value.trim(),
     sub2apiEmail: inputSub2ApiEmail.value.trim(),
@@ -1685,6 +1694,7 @@ function applySettingsState(state) {
   syncPasswordField(state || {});
   inputVpsUrl.value = state?.vpsUrl || '';
   inputVpsPassword.value = state?.vpsPassword || '';
+  heroSmsManager?.applySettingsState?.(state);
   setLocalCpaStep9Mode(state?.localCpaStep9Mode);
   selectPanelMode.value = state?.panelMode || 'cpa';
   inputSub2ApiUrl.value = state?.sub2apiUrl || '';
@@ -2965,6 +2975,29 @@ const resetLuckmailManager = luckmailManager?.reset
 const bindLuckmailEvents = luckmailManager?.bindLuckmailEvents
   || (() => { });
 bindLuckmailEvents();
+
+const heroSmsManager = window.SidepanelHeroSmsManager?.createHeroSmsManager({
+  dom: {
+    rowHeroSmsEnabled,
+    heroSmsEnabledButtons,
+    rowHeroSmsApiKey,
+    inputHeroSmsApiKey,
+    btnToggleHeroSmsApiKey,
+    rowHeroSmsCountry,
+    inputHeroSmsCountry,
+    btnQueryHeroSmsCountries,
+  },
+  helpers: {
+    markSettingsDirty,
+    openExternalUrl,
+    saveSettings,
+    scheduleSettingsAutoSave,
+    syncToggleButtonLabel,
+  },
+});
+const bindHeroSmsEvents = heroSmsManager?.bindHeroSmsEvents
+  || (() => { });
+bindHeroSmsEvents();
 
 const accountRecordsManager = window.SidepanelAccountRecordsManager?.createAccountRecordsManager({
   state: {

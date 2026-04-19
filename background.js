@@ -2,6 +2,7 @@
 
 importScripts(
   'managed-alias-utils.js',
+  'hero-sms-utils.js',
   'background/account-run-history.js',
   'background/panel-bridge.js',
   'background/generated-email-helpers.js',
@@ -12,6 +13,7 @@ importScripts(
   'background/tab-runtime.js',
   'background/navigation-utils.js',
   'background/logging-status.js',
+  'background/phone-verification.js',
   'background/steps/registry.js',
   'data/step-definitions.js',
   'background/steps/open-chatgpt.js',
@@ -110,6 +112,11 @@ const {
   pickReusableIcloudAlias,
   toNormalizedEmailSet,
 } = self.IcloudUtils;
+const {
+  findOrCreateSmsActivation: heroFindOrCreateSmsActivation,
+  finishActivation: heroFinishSmsActivation,
+  pollSmsVerificationCode: heroPollSmsVerificationCode,
+} = self.HeroSmsUtils || {};
 const {
   isRecoverableStep9AuthFailure,
 } = self.MultiPageActivationUtils;
@@ -213,6 +220,9 @@ const PERSISTED_SETTING_DEFAULTS = {
   panelMode: 'cpa',
   vpsUrl: '',
   vpsPassword: '',
+  heroSmsEnabled: false,
+  heroSmsApiKey: '',
+  heroSmsCountry: '',
   localCpaStep9Mode: DEFAULT_LOCAL_CPA_STEP9_MODE,
   sub2apiUrl: DEFAULT_SUB2API_URL,
   sub2apiEmail: '',
@@ -323,6 +333,8 @@ const DEFAULT_STATE = {
   oauthFlowDeadlineAt: null,
   currentHotmailAccountId: null,
   preferredIcloudHost: '',
+  currentHeroSmsActivationId: null,
+  currentHeroSmsPhoneNumber: null,
 };
 
 function normalizeAutoRunDelayMinutes(value) {
@@ -823,6 +835,11 @@ function normalizePersistentSettingValue(key, value) {
       return String(value || '').trim();
     case 'vpsPassword':
       return String(value || '');
+    case 'heroSmsEnabled':
+      return Boolean(value);
+    case 'heroSmsApiKey':
+    case 'heroSmsCountry':
+      return String(value || '').trim();
     case 'localCpaStep9Mode':
       return normalizeLocalCpaStep9Mode(value);
     case 'sub2apiUrl':
@@ -1251,6 +1268,13 @@ async function setIcloudAliasPreservedState(payload = {}) {
 
 async function resetState() {
   console.log(LOG_PREFIX, 'Resetting all state');
+  const latestState = await getState();
+  if (phoneVerificationHelpers?.cleanupHeroSmsActivation) {
+    await phoneVerificationHelpers.cleanupHeroSmsActivation({
+      state: latestState,
+      logFailure: true,
+    }).catch(() => { });
+  }
   // Preserve settings and persistent data across resets
   const [prev, persistedSettings, persistedAliasState] = await Promise.all([
     chrome.storage.session.get([
@@ -3838,6 +3862,28 @@ function getErrorMessage(error) {
   return String(typeof error === 'string' ? error : error?.message || '');
 }
 
+const phoneVerificationHelpers = self.MultiPageBackgroundPhoneVerification?.createPhoneVerificationHelpers({
+  addLog,
+  broadcastDataUpdate,
+  chrome,
+  clearLuckmailRuntimeState,
+  getCurrentLuckmailPurchase,
+  getErrorMessage,
+  getState,
+  heroFindOrCreateSmsActivation,
+  heroFinishSmsActivation,
+  heroPollSmsVerificationCode,
+  isHotmailProvider,
+  isHeroSmsFirstCodeTimeoutError,
+  isPhoneMaxUsageExceededError,
+  isLuckmailProvider,
+  patchHotmailAccount,
+  setLuckmailPurchaseUsedState,
+  setState,
+  sleepWithStop,
+  throwIfStopped,
+});
+
 function isCloudflareSecurityBlockedError(error) {
   return getErrorMessage(error).startsWith(CLOUDFLARE_SECURITY_BLOCK_ERROR_PREFIX);
 }
@@ -3903,6 +3949,22 @@ function isAddPhoneAuthFailure(error) {
   }
   const message = getErrorMessage(error);
   return /https:\/\/auth\.openai\.com\/add-phone(?:[/?#]|$)|\badd-phone\b|添加手机号|手机号码|手机号页|手机号页面|手机号|phone\s+number|telephone/i.test(message);
+}
+
+function isPhoneMaxUsageExceededError(error) {
+  if (typeof loggingStatus !== 'undefined' && loggingStatus?.isPhoneMaxUsageExceededError) {
+    return loggingStatus.isPhoneMaxUsageExceededError(error);
+  }
+  const message = getErrorMessage(error);
+  return /PHONE_MAX_USAGE_EXCEEDED::|phone[_\s-]*max[_\s-]*usage[_\s-]*exceeded/i.test(message);
+}
+
+function isHeroSmsFirstCodeTimeoutError(error) {
+  if (typeof loggingStatus !== 'undefined' && loggingStatus?.isHeroSmsFirstCodeTimeoutError) {
+    return loggingStatus.isHeroSmsFirstCodeTimeoutError(error);
+  }
+  const message = getErrorMessage(error);
+  return /HERO_SMS_FIRST_CODE_TIMEOUT::|hero[_\s-]*sms[_\s-]*first[_\s-]*code[_\s-]*timeout/i.test(message);
 }
 
 function getLoginAuthStateLabel(state) {
@@ -4933,8 +4995,17 @@ async function requestStop(options = {}) {
   const { logMessage = '已收到停止请求，正在取消当前操作...' } = options;
   const state = await getState();
   const timerPlan = getPendingAutoRunTimerPlan(state);
+  const cleanupPhoneVerificationState = async () => {
+    if (phoneVerificationHelpers?.cleanupHeroSmsActivation) {
+      await phoneVerificationHelpers.cleanupHeroSmsActivation({
+        state,
+        logFailure: true,
+      }).catch(() => { });
+    }
+  };
 
   if (timerPlan?.kind === AUTO_RUN_TIMER_KIND_SCHEDULED_START && !autoRunActive) {
+    await cleanupPhoneVerificationState();
     await cancelScheduledAutoRun({
       logMessage: options.logMessage === false
         ? false
@@ -4948,6 +5019,7 @@ async function requestStop(options = {}) {
     autoRunTotalRuns = timerPlan.totalRuns;
     autoRunAttemptRun = timerPlan.attemptRun;
     clearCurrentAutoRunSessionId(timerPlan.autoRunSessionId);
+    await cleanupPhoneVerificationState();
     if (options.logMessage !== false) {
       await addLog(options.logMessage || '已停止等待中的自动流程。', 'warn');
     }
@@ -4975,6 +5047,7 @@ async function requestStop(options = {}) {
   cancelPendingCommands();
   cleanupStep8NavigationListeners();
   rejectPendingStep8(new Error(STOP_ERROR_MESSAGE));
+  await cleanupPhoneVerificationState();
 
   await addLog(logMessage, 'warn');
   await broadcastStopToContentScripts();
@@ -5258,6 +5331,8 @@ const autoRunController = self.MultiPageBackgroundAutoRunController?.createAutoR
   getStopRequested: () => stopRequested,
   hasSavedProgress,
   isAddPhoneAuthFailure,
+  isHeroSmsFirstCodeTimeoutError,
+  isPhoneMaxUsageExceededError,
   isRestartCurrentAttemptError,
   isStopError,
   launchAutoRunTimerPlan,
@@ -5946,6 +6021,7 @@ const messageRouter = self.MultiPageBackgroundMessageRouter?.createMessageRouter
   clearAccountRunHistory: (...args) => clearAndBroadcastAccountRunHistory(...args),
   deleteAccountRunHistoryRecords: (...args) => deleteAndBroadcastAccountRunHistoryRecords(...args),
   clearAutoRunTimerAlarm,
+  cleanupHeroSmsActivation: (...args) => phoneVerificationHelpers?.cleanupHeroSmsActivation?.(...args),
   clearLuckmailRuntimeState,
   clearStopRequest,
   closeLocalhostCallbackTabs,
@@ -6660,24 +6736,29 @@ async function getStep8PageState(tabId, responseTimeoutMs = 1500) {
   }
 }
 
-async function waitForStep8Ready(tabId, timeoutMs = STEP8_READY_WAIT_TIMEOUT_MS) {
+async function waitForStep8Ready(tabId, timeoutMs = STEP8_READY_WAIT_TIMEOUT_MS, options = {}) {
   const start = Date.now();
   let recovered = false;
   let retryRecovered = false;
+  const allowVerificationPage = Boolean(options?.allowVerificationPage);
+  const logStep = Number(options?.logStep) || 9;
 
   while (Date.now() - start < timeoutMs) {
     throwIfStopped();
     const pageState = await getStep8PageState(tabId);
+    if (pageState?.phoneMaxUsageExceeded) {
+      throw new Error('PHONE_MAX_USAGE_EXCEEDED::phone_max_usage_exceeded');
+    }
     if (pageState?.maxCheckAttemptsBlocked) {
       throw new Error(`${CLOUDFLARE_SECURITY_BLOCK_ERROR_PREFIX}${CLOUDFLARE_SECURITY_BLOCK_USER_MESSAGE}`);
     }
-    if (pageState?.addPhonePage) {
-      throw new Error('步骤 9：认证页进入了手机号页面，当前不是 OAuth 同意页，无法继续自动授权。');
+    if (pageState?.addPhonePage && !allowVerificationPage) {
+      throw new Error(`步骤 ${logStep}：认证页进入了手机号页面，当前不是可继续状态。`);
     }
     if (pageState?.retryPage) {
       await recoverAuthRetryPageOnTab(tabId, {
         flow: 'auth',
-        logLabel: '步骤 9：检测到认证页重试页，正在点击“重试”恢复',
+        logLabel: `步骤 ${logStep}：检测到认证页重试页，正在点击“重试”恢复`,
         step: 8,
         timeoutMs: Math.max(1000, Math.min(12000, timeoutMs)),
       });
@@ -6687,7 +6768,13 @@ async function waitForStep8Ready(tabId, timeoutMs = STEP8_READY_WAIT_TIMEOUT_MS)
     }
     if (pageState?.consentReady) {
       if (retryRecovered) {
-        await addLog('步骤 9：认证页重试页已恢复，准备重新定位“继续”按钮...', 'info');
+        await addLog(`步骤 ${logStep}：认证页重试页已恢复，准备重新定位“继续”按钮...`, 'info');
+      }
+      return pageState;
+    }
+    if (allowVerificationPage && pageState?.verificationPage) {
+      if (retryRecovered) {
+        await addLog(`步骤 ${logStep}：验证码页已恢复，准备重新定位“继续”按钮...`, 'info');
       }
       return pageState;
     }
@@ -6695,7 +6782,7 @@ async function waitForStep8Ready(tabId, timeoutMs = STEP8_READY_WAIT_TIMEOUT_MS)
       recovered = true;
       await ensureStep8SignupPageReady(tabId, {
         timeoutMs: Math.min(10000, timeoutMs),
-        logMessage: '步骤 9：认证页内容脚本已失联，正在等待页面重新就绪...',
+        logMessage: `步骤 ${logStep}：认证页内容脚本已失联，正在等待页面重新就绪...`,
       });
       continue;
     }
@@ -6703,25 +6790,31 @@ async function waitForStep8Ready(tabId, timeoutMs = STEP8_READY_WAIT_TIMEOUT_MS)
     await sleepWithStop(250);
   }
 
-  throw new Error('步骤 9：长时间未进入 OAuth 同意页，无法定位“继续”按钮。');
+  throw new Error(`步骤 ${logStep}：长时间未进入可执行 Continue 的页面。`);
 }
 
 async function prepareStep8DebuggerClick(tabId, options = {}) {
   const timeoutMs = options.timeoutMs ?? 15000;
   const responseTimeoutMs = options.responseTimeoutMs ?? timeoutMs;
+  const allowVerificationPage = Boolean(options.allowVerificationPage);
+  const logStep = Number(options.logStep) || 9;
   await ensureStep8SignupPageReady(tabId, {
     timeoutMs,
-    logMessage: '步骤 9：认证页内容脚本已失联，正在恢复后继续定位按钮...',
+    logMessage: `步骤 ${logStep}：认证页内容脚本已失联，正在恢复后继续定位按钮...`,
   });
   const result = await sendToContentScriptResilient('signup-page', {
     type: 'STEP8_FIND_AND_CLICK',
     source: 'background',
-    payload: {},
+    payload: {
+      allowVerificationPage,
+      findTimeoutMs: 4000,
+      enabledTimeoutMs: 3000,
+    },
   }, {
     timeoutMs,
     responseTimeoutMs,
     retryDelayMs: 600,
-    logMessage: '步骤 9：认证页正在切换，等待 OAuth 同意页按钮重新就绪...',
+    logMessage: `步骤 ${logStep}：认证页正在切换，等待 Continue 按钮重新就绪...`,
   });
 
   if (result?.error) {
@@ -6734,9 +6827,11 @@ async function prepareStep8DebuggerClick(tabId, options = {}) {
 async function triggerStep8ContentStrategy(tabId, strategy, options = {}) {
   const timeoutMs = options.timeoutMs ?? 15000;
   const responseTimeoutMs = options.responseTimeoutMs ?? timeoutMs;
+  const allowVerificationPage = Boolean(options.allowVerificationPage);
+  const logStep = Number(options.logStep) || 9;
   await ensureStep8SignupPageReady(tabId, {
     timeoutMs,
-    logMessage: '步骤 9：认证页内容脚本已失联，正在恢复后继续点击“继续”按钮...',
+    logMessage: `步骤 ${logStep}：认证页内容脚本已失联，正在恢复后继续点击“继续”按钮...`,
   });
   const result = await sendToContentScriptResilient('signup-page', {
     type: 'STEP8_TRIGGER_CONTINUE',
@@ -6745,12 +6840,14 @@ async function triggerStep8ContentStrategy(tabId, strategy, options = {}) {
       strategy,
       findTimeoutMs: 4000,
       enabledTimeoutMs: 3000,
+      logStep,
+      allowVerificationPage,
     },
   }, {
     timeoutMs,
     responseTimeoutMs,
     retryDelayMs: 600,
-    logMessage: '步骤 9：认证页正在切换，等待“继续”按钮重新就绪...',
+    logMessage: `步骤 ${logStep}：认证页正在切换，等待“继续”按钮重新就绪...`,
   });
 
   if (result?.error) {
@@ -6829,33 +6926,36 @@ async function reloadStep8ConsentPage(tabId, timeoutMs = 30000) {
   });
 }
 
-async function waitForStep8ClickEffect(tabId, baselineUrl, timeoutMs = STEP8_CLICK_EFFECT_TIMEOUT_MS) {
+async function waitForStep8ClickEffect(tabId, baselineUrl, timeoutMs = STEP8_CLICK_EFFECT_TIMEOUT_MS, options = {}) {
   const start = Date.now();
   let recovered = false;
+  const allowVerificationPage = Boolean(options?.allowVerificationPage);
+  const baselineVerificationPage = Boolean(options?.baselineVerificationPage);
+  const logStep = Number(options?.logStep) || 9;
 
   while (Date.now() - start < timeoutMs) {
     throwIfStopped();
 
     const tab = await chrome.tabs.get(tabId).catch(() => null);
     if (!tab) {
-      throw new Error('步骤 9：认证页面标签页已关闭，无法继续自动授权。');
+      throw new Error(`步骤 ${logStep}：认证页面标签页已关闭，无法继续自动授权。`);
     }
-
-    if (baselineUrl && typeof tab.url === 'string' && tab.url !== baselineUrl) {
-      return { progressed: true, reason: 'url_changed', url: tab.url };
-    }
+    const tabUrlChanged = Boolean(baselineUrl && typeof tab.url === 'string' && tab.url !== baselineUrl);
 
     const pageState = await getStep8PageState(tabId);
+    if (pageState?.phoneMaxUsageExceeded) {
+      throw new Error('PHONE_MAX_USAGE_EXCEEDED::phone_max_usage_exceeded');
+    }
     if (pageState?.maxCheckAttemptsBlocked) {
       throw new Error(`${CLOUDFLARE_SECURITY_BLOCK_ERROR_PREFIX}${CLOUDFLARE_SECURITY_BLOCK_USER_MESSAGE}`);
     }
-    if (pageState?.addPhonePage) {
-      throw new Error('步骤 9：点击“继续”后页面跳到了手机号页面，当前流程无法继续自动授权。');
+    if (pageState?.addPhonePage && !allowVerificationPage) {
+      throw new Error(`步骤 ${logStep}：点击“继续”后页面跳到了手机号页面，当前流程无法继续自动授权。`);
     }
     if (pageState?.retryPage) {
       await recoverAuthRetryPageOnTab(tabId, {
         flow: 'auth',
-        logLabel: '步骤 9：点击“继续”后进入重试页，正在点击“重试”恢复',
+        logLabel: `步骤 ${logStep}：点击“继续”后进入重试页，正在点击“重试”恢复`,
         step: 8,
         timeoutMs: Math.max(1000, Math.min(12000, timeoutMs)),
       });
@@ -6871,7 +6971,7 @@ async function waitForStep8ClickEffect(tabId, baselineUrl, timeoutMs = STEP8_CLI
         recovered = true;
         await ensureStep8SignupPageReady(tabId, {
           timeoutMs: Math.max(1000, Math.min(8000, timeoutMs)),
-          logMessage: '步骤 9：点击后认证页正在重载，正在等待内容脚本重新就绪...',
+          logMessage: `步骤 ${logStep}：点击后认证页正在重载，正在等待内容脚本重新就绪...`,
         }).catch(() => null);
         continue;
       }
@@ -6879,6 +6979,23 @@ async function waitForStep8ClickEffect(tabId, baselineUrl, timeoutMs = STEP8_CLI
       continue;
     }
     recovered = false;
+
+    if (baselineVerificationPage && pageState?.consentReady && !pageState?.verificationPage) {
+      return {
+        progressed: false,
+        reason: 'entered_consent_page',
+        restartCurrentStep: true,
+        url: pageState.url || baselineUrl || '',
+      };
+    }
+
+    if (tabUrlChanged) {
+      return {
+        progressed: true,
+        reason: 'url_changed',
+        url: tab.url,
+      };
+    }
 
     if (pageState?.consentPage === false && !pageState?.verificationPage) {
       return {
@@ -6898,6 +7015,8 @@ function getStep8EffectLabel(effect) {
   switch (effect?.reason) {
     case 'url_changed':
       return `URL 已变化：${effect.url}`;
+    case 'entered_consent_page':
+      return `页面已从验证码页进入 OAuth 同意页：${effect.url || 'unknown'}`;
     case 'retry_page_recovered':
       return '页面进入重试页并已恢复，需要重新执行当前步骤';
     case 'page_reloading':
@@ -6916,6 +7035,7 @@ const step9Executor = self.MultiPageBackgroundStep9?.createStep9Executor({
   clickWithDebugger,
   completeStepFromBackground,
   ensureStep8SignupPageReady,
+  ensurePhoneVerificationIfNeeded: (...args) => phoneVerificationHelpers?.ensurePhoneVerificationIfNeeded?.(...args),
   getOAuthFlowStepTimeoutMs,
   getStep8CallbackUrlFromNavigation,
   getStep8CallbackUrlFromTabUpdate,
@@ -6939,6 +7059,9 @@ const step9Executor = self.MultiPageBackgroundStep9?.createStep9Executor({
   STEP8_STRATEGIES,
   throwIfStep8SettledOrStopped,
   triggerStep8ContentStrategy,
+  isHeroSmsFirstCodeTimeoutError,
+  handlePhoneMaxUsageExceededFlow: (...args) => phoneVerificationHelpers?.handlePhoneMaxUsageExceededFlow?.(...args),
+  isPhoneMaxUsageExceededError,
   waitForStep8ClickEffect,
   waitForStep8Ready,
 });

@@ -56,6 +56,7 @@
 - 支持 `QQ Mail`、`163 Mail`、`Inbucket mailbox`
 - 支持从 DuckDuckGo Email Protection 自动生成新的 `@duck.com` 地址
 - 支持基于 Cloudflare 自定义域名自动生成随机邮箱前缀
+- 支持 `Hero-SMS` 手机号验证：Step 8 提交登录验证码后若进入 `add-phone`，可转入 Step 9 完成短信验证后继续 OAuth confirm
 - Step 5 同时兼容两种页面：
   - 页面要求填写 `birthday`
   - 页面要求填写 `age`
@@ -76,6 +77,7 @@
   - Cloudflare 自定义域邮箱前缀 + QQ / 163 / Inbucket 转发
   - 手动填写一个可收信邮箱
 - 如果使用 `QQ` / `163` / `Inbucket`，对应页面需要提前能正常打开
+- 如果需要自动过手机号验证，需要准备可用的 `Hero-SMS API Key` 与国家代码
 
 ## 安装
 
@@ -206,6 +208,24 @@ Step 1 和 Step 10 都依赖这个地址。
 - 点击 `校验`
 - 校验通过后，可点击 `测试收信`
 - Auto 模式每轮会自动选用一个可用账号
+
+### `Hero-SMS / 手机号验证`
+
+仅当登录验证码提交后页面进入 `add-phone / 手机号页` 时才会使用。
+
+可配置项：
+
+- `Hero-SMS`：启用 / 禁用
+- `SMS-APIKey`
+- `SMS-国家`
+
+行为说明：
+
+- 未启用时：保持当前仓库原行为，进入 `add-phone` 会直接失败
+- 启用后：Step 8 会把“进入 add-phone”视为可继续分支，Step 9 先完成手机号验证，再继续 OAuth confirm
+- 成功跑完后只会清理本轮运行态，不会在首次接码后立刻注销号码；同一号码会在本地 3 次上限内尽量复用
+- 如果某个 Hero-SMS 号码在约 **125 秒**内一直没有收到任何首个验证码，会自动取消当前 activation、放弃该号码，并把当前 attempt 交给外层重试；不会假设页面一定能回退后直接换号继续
+- 如果命中 `phone_max_usage_exceeded`，当前轮会直接失败；开启自动重试/跳过失败时，会直接进入下一轮
 
 #### 本地 helper 启动命令
 
@@ -678,12 +698,14 @@ Step 8 默认要求当前认证页已经处于登录验证码页。
 
 ```txt
 background.js              后台主控，编排 1~9 步、Tab 复用、状态管理
+hero-sms-utils.js         Hero-SMS API 与手机号验证码轮询工具
 manifest.json              扩展清单
 data/names.js              随机姓名、生日数据
 content/utils.js           通用工具：等待元素、点击、日志、停止控制
 content/vps-panel.js       CPA 面板步骤：内部 OAuth 刷新 / Step 10
 content/signup-page.js     ChatGPT 官网 + OpenAI 注册/登录页步骤：Step 1 / 2 / 3 / 5 / 7 / 9
 hotmail-utils.js           Hotmail 收信相关通用辅助
+background/phone-verification.js 手机号验证后台辅助
 content/duck-mail.js       Duck 邮箱自动获取
 content/qq-mail.js         QQ 邮箱验证码轮询
 content/mail-163.js        163 邮箱验证码轮询

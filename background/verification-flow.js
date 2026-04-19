@@ -543,6 +543,7 @@
     async function resolveVerificationStep(step, state, mail, options = {}) {
       const stateKey = getVerificationCodeStateKey(step);
       const rejectedCodes = new Set();
+      const allowAddPhoneSuccess = Boolean(options.allowAddPhoneSuccess);
       const hotmailPollConfig = mail.provider === HOTMAIL_PROVIDER
         ? getHotmailVerificationPollConfig(step)
         : null;
@@ -670,6 +671,28 @@
           }
 
           if (submitResult.addPhonePage) {
+            if (step === 8 && allowAddPhoneSuccess) {
+              await setState({
+                lastEmailTimestamp: result.emailTimestamp,
+                [stateKey]: result.code,
+              });
+
+              await completeStepFromBackground(step, {
+                emailTimestamp: result.emailTimestamp,
+                code: result.code,
+                addPhonePage: true,
+                branch: 'phone_verification',
+                url: submitResult.url || '',
+              });
+              triggerPostSuccessMailboxCleanup(step, mail);
+              return {
+                branch: 'phone_verification',
+                addPhonePage: true,
+                url: submitResult.url || '',
+                code: result.code,
+                emailTimestamp: result.emailTimestamp,
+              };
+            }
             const urlPart = submitResult.url ? ` URL: ${submitResult.url}` : '';
             throw new Error(`步骤 ${step}：验证码提交后页面进入手机号页面，当前流程无法继续自动授权。${urlPart}`.trim());
           }
@@ -682,9 +705,14 @@
           await completeStepFromBackground(step, {
             emailTimestamp: result.emailTimestamp,
             code: result.code,
+            branch: 'normal',
           });
           triggerPostSuccessMailboxCleanup(step, mail);
-          return;
+          return {
+            branch: 'normal',
+            code: result.code,
+            emailTimestamp: result.emailTimestamp,
+          };
         }
       }
 

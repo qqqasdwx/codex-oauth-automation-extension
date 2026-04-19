@@ -15,6 +15,7 @@
       clearAccountRunHistory,
       deleteAccountRunHistoryRecords,
       clearAutoRunTimerAlarm,
+      cleanupHeroSmsActivation,
       clearLuckmailRuntimeState,
       clearStopRequest,
       closeLocalhostCallbackTabs,
@@ -168,6 +169,11 @@
             await closeLocalhostCallbackTabs(payload.localhostUrl);
           }
           const latestState = await getState();
+          if (typeof cleanupHeroSmsActivation === 'function') {
+            await cleanupHeroSmsActivation({
+              state: latestState,
+            });
+          }
           if (latestState.currentHotmailAccountId && isHotmailProvider(latestState)) {
             await patchHotmailAccount(latestState.currentHotmailAccountId, {
               used: true,

@@ -66,6 +66,16 @@
       return /https:\/\/auth\.openai\.com\/add-phone(?:[/?#]|$)|\badd-phone\b|添加手机号|手机号码|手机号页|手机号页面|手机号|phone\s+number|telephone/i.test(message);
     }
 
+    function isPhoneMaxUsageExceededError(error) {
+      const message = getErrorMessage(error);
+      return /PHONE_MAX_USAGE_EXCEEDED::|phone[_\s-]*max[_\s-]*usage[_\s-]*exceeded/i.test(message);
+    }
+
+    function isHeroSmsFirstCodeTimeoutError(error) {
+      const message = getErrorMessage(error);
+      return /HERO_SMS_FIRST_CODE_TIMEOUT::|hero[_\s-]*sms[_\s-]*first[_\s-]*code[_\s-]*timeout/i.test(message);
+    }
+
     function getLoginAuthStateLabel(state) {
       state = state === 'oauth_consent_page' ? 'unknown' : state;
       switch (state) {
@@ -154,6 +164,8 @@
       addLog,
       getAutoRunStatusPayload,
       isAddPhoneAuthFailure,
+      isHeroSmsFirstCodeTimeoutError,
+      isPhoneMaxUsageExceededError,
       getErrorMessage,
       getFirstUnfinishedStep,
       getLoginAuthStateLabel,

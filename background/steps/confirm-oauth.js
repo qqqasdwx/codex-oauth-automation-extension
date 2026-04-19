@@ -9,11 +9,15 @@
       clickWithDebugger,
       completeStepFromBackground,
       ensureStep8SignupPageReady,
+      ensurePhoneVerificationIfNeeded,
       getOAuthFlowStepTimeoutMs,
       getStep8CallbackUrlFromNavigation,
       getStep8CallbackUrlFromTabUpdate,
       getStep8EffectLabel,
       getTabId,
+      getWebNavCommittedListener,
+      getWebNavListener,
+      getStep8TabUpdatedListener,
       isTabAlive,
       prepareStep8DebuggerClick,
       reloadStep8ConsentPage,
@@ -25,6 +29,9 @@
       STEP8_STRATEGIES,
       throwIfStep8SettledOrStopped,
       triggerStep8ContentStrategy,
+      handlePhoneMaxUsageExceededFlow,
+      isHeroSmsFirstCodeTimeoutError,
+      isPhoneMaxUsageExceededError,
       waitForStep8ClickEffect,
       waitForStep8Ready,
       setWebNavListener,
@@ -41,11 +48,11 @@
       await addLog('步骤 9：正在监听 localhost 回调地址...');
 
       const callbackTimeoutMs = typeof getOAuthFlowStepTimeoutMs === 'function'
-        ? await getOAuthFlowStepTimeoutMs(120000, {
+        ? await getOAuthFlowStepTimeoutMs(state?.heroSmsEnabled ? 360000 : 120000, {
           step: 9,
           actionLabel: 'OAuth localhost 回调',
         })
-        : 120000;
+        : (state?.heroSmsEnabled ? 360000 : 120000);
 
       return new Promise((resolve, reject) => {
         let resolved = false;
@@ -81,7 +88,7 @@
         };
 
         const timeout = setTimeout(() => {
-          rejectStep9(new Error('120 秒内未捕获到 localhost 回调跳转，步骤 9 的点击可能被拦截了。'));
+          rejectStep9(new Error(`${Math.ceil(callbackTimeoutMs / 1000)} 秒内未捕获到 localhost 回调跳转，步骤 9 的点击可能被拦截了。`));
         }, callbackTimeoutMs);
 
         setStep8PendingReject((error) => {
@@ -108,6 +115,7 @@
             throwIfStep8SettledOrStopped(resolved);
             signupTabId = await getTabId('signup-page');
             throwIfStep8SettledOrStopped(resolved);
+            let phoneVerificationResult = null;
 
             if (signupTabId && await isTabAlive('signup-page')) {
               await chrome.tabs.update(signupTabId, { active: true });
@@ -118,9 +126,9 @@
             }
 
             throwIfStep8SettledOrStopped(resolved);
-            chrome.webNavigation.onBeforeNavigate.addListener(deps.getWebNavListener());
-            chrome.webNavigation.onCommitted.addListener(deps.getWebNavCommittedListener());
-            chrome.tabs.onUpdated.addListener(deps.getStep8TabUpdatedListener());
+            chrome.webNavigation.onBeforeNavigate.addListener(getWebNavListener());
+            chrome.webNavigation.onCommitted.addListener(getWebNavCommittedListener());
+            chrome.tabs.onUpdated.addListener(getStep8TabUpdatedListener());
             await ensureStep8SignupPageReady(signupTabId, {
               timeoutMs: typeof getOAuthFlowStepTimeoutMs === 'function'
                 ? await getOAuthFlowStepTimeoutMs(15000, {
@@ -130,6 +138,23 @@
                 : 15000,
               logMessage: '步骤 9：认证页内容脚本尚未就绪，正在等待页面恢复...',
             });
+            phoneVerificationResult = typeof ensurePhoneVerificationIfNeeded === 'function'
+              ? await ensurePhoneVerificationIfNeeded(state, signupTabId, {
+                pageReadyTimeoutMs: typeof getOAuthFlowStepTimeoutMs === 'function'
+                  ? await getOAuthFlowStepTimeoutMs(60000, {
+                    step: 9,
+                    actionLabel: '等待手机号验证页就绪',
+                  })
+                  : 60000,
+                codeStageTimeoutMs: typeof getOAuthFlowStepTimeoutMs === 'function'
+                  ? await getOAuthFlowStepTimeoutMs(60000, {
+                    step: 9,
+                    actionLabel: '等待短信验证码输入框出现',
+                  })
+                  : 60000,
+              })
+              : null;
+            const allowVerificationPage = Boolean(phoneVerificationResult?.handled);
 
             for (let round = 1; round <= STEP8_MAX_ROUNDS && !resolved; round++) {
               throwIfStep8SettledOrStopped(resolved);
@@ -140,9 +165,14 @@
                     step: 9,
                     actionLabel: '等待 OAuth 同意页出现',
                   })
-                  : STEP8_READY_WAIT_TIMEOUT_MS
+                  : STEP8_READY_WAIT_TIMEOUT_MS,
+                {
+                  allowVerificationPage,
+                  logStep: 9,
+                }
               );
-              if (!pageState?.consentReady) {
+              const continueReady = Boolean(pageState?.consentReady || (allowVerificationPage && pageState?.verificationPage));
+              if (!continueReady) {
                 await sleepWithStop(STEP8_CLICK_RETRY_DELAY_MS);
                 continue;
               }
@@ -159,6 +189,8 @@
                   })
                   : 15000;
                 const clickTarget = await prepareStep8DebuggerClick(signupTabId, {
+                  allowVerificationPage,
+                  logStep: 9,
                   timeoutMs: clickActionTimeoutMs,
                   responseTimeoutMs: clickActionTimeoutMs,
                 });
@@ -172,6 +204,8 @@
                   })
                   : 15000;
                 await triggerStep8ContentStrategy(signupTabId, strategy.strategy, {
+                  allowVerificationPage,
+                  logStep: 9,
                   timeoutMs: clickActionTimeoutMs,
                   responseTimeoutMs: clickActionTimeoutMs,
                 });
@@ -189,7 +223,12 @@
                     step: 9,
                     actionLabel: '等待 OAuth 同意页点击生效',
                   })
-                  : 15000
+                  : 15000,
+                {
+                  allowVerificationPage,
+                  baselineVerificationPage: Boolean(pageState?.verificationPage),
+                  logStep: 9,
+                }
               );
               if (resolved) {
                 return;
@@ -223,6 +262,21 @@
               await sleepWithStop(STEP8_CLICK_RETRY_DELAY_MS);
             }
           } catch (err) {
+            if (typeof isPhoneMaxUsageExceededError === 'function' && isPhoneMaxUsageExceededError(err)) {
+              try {
+                if (typeof handlePhoneMaxUsageExceededFlow === 'function') {
+                  await handlePhoneMaxUsageExceededFlow();
+                }
+              } catch (_) {
+                // Preserve original phone max usage error.
+              }
+            } else if (typeof isHeroSmsFirstCodeTimeoutError === 'function' && isHeroSmsFirstCodeTimeoutError(err)) {
+              try {
+                await addLog('步骤 9：当前 Hero-SMS 号码在 125 秒内未收到任何验证码，本次 attempt 将结束并等待外层重试。', 'warn');
+              } catch (_) {
+                // Preserve original first-code-timeout error.
+              }
+            }
             rejectStep9(err);
           }
         })();

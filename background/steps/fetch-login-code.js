@@ -130,6 +130,7 @@
         ...state,
         step8VerificationTargetEmail: displayedVerificationEmail || '',
       }, mail, {
+        allowAddPhoneSuccess: Boolean(state?.heroSmsEnabled),
         filterAfterTimestamp: stepStartedAt,
         getRemainingTimeMs: getStep8RemainingTimeResolver(),
         requestFreshCodeFirst: false,

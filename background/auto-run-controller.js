@@ -22,6 +22,8 @@
       getState,
       hasSavedProgress,
       isAddPhoneAuthFailure,
+      isHeroSmsFirstCodeTimeoutError,
+      isPhoneMaxUsageExceededError,
       isRestartCurrentAttemptError,
       isStopError,
       launchAutoRunTimerPlan,
@@ -458,7 +460,14 @@
             const reason = getErrorMessage(err);
             roundSummary.failureReasons.push(reason);
             const blockedByAddPhone = typeof isAddPhoneAuthFailure === 'function' && isAddPhoneAuthFailure(err);
-            const canRetry = !blockedByAddPhone && autoRunSkipFailures && attemptRun < maxAttemptsForRound;
+            const blockedByHeroSmsFirstCodeTimeout = typeof isHeroSmsFirstCodeTimeoutError === 'function'
+              && isHeroSmsFirstCodeTimeoutError(err);
+            const blockedByPhoneMaxUsage = typeof isPhoneMaxUsageExceededError === 'function'
+              && isPhoneMaxUsageExceededError(err);
+            const canRetry = !blockedByAddPhone
+              && !blockedByPhoneMaxUsage
+              && autoRunSkipFailures
+              && attemptRun < maxAttemptsForRound;
 
             await setState({
               autoRunRoundSummaries: serializeAutoRunRoundSummaries(totalRuns, roundSummaries),
@@ -499,10 +508,50 @@
               break;
             }
 
+            if (blockedByPhoneMaxUsage) {
+              roundSummary.status = 'failed';
+              roundSummary.finalFailureReason = reason;
+              await setState({
+                autoRunRoundSummaries: serializeAutoRunRoundSummaries(totalRuns, roundSummaries),
+              });
+              await appendRoundRecordIfNeeded('failed', reason);
+              cancelPendingCommands('当前轮因 phone_max_usage_exceeded 已终止。');
+              await broadcastStopToContentScripts();
+              if (!autoRunSkipFailures) {
+                await addLog(
+                  `第 ${targetRun}/${totalRuns} 轮触发 phone_max_usage_exceeded，自动重试未开启，当前自动运行将停止。`,
+                  'warn'
+                );
+                stoppedEarly = true;
+                await broadcastAutoRunStatus('stopped', {
+                  currentRun: targetRun,
+                  totalRuns,
+                  attemptRun,
+                  sessionId: 0,
+                });
+                break;
+              }
+
+              await addLog(`第 ${targetRun}/${totalRuns} 轮触发 phone_max_usage_exceeded，本轮将直接失败并跳过剩余重试。`, 'warn');
+              await addLog(
+                targetRun < totalRuns
+                  ? `第 ${targetRun}/${totalRuns} 轮因 phone_max_usage_exceeded 提前结束，自动流程将继续下一轮。`
+                  : `第 ${targetRun}/${totalRuns} 轮因 phone_max_usage_exceeded 提前结束，已无后续轮次，本次自动运行结束。`,
+                'warn'
+              );
+              forceFreshTabsNextRun = true;
+              break;
+            }
+
             if (canRetry) {
               const retryIndex = attemptRun;
               if (isRestartCurrentAttemptError(err)) {
                 await addLog(`第 ${targetRun}/${totalRuns} 轮第 ${attemptRun} 次尝试需要整轮重开：${reason}`, 'warn');
+              } else if (blockedByHeroSmsFirstCodeTimeout) {
+                await addLog(
+                  `第 ${targetRun}/${totalRuns} 轮第 ${attemptRun} 次尝试触发 Hero-SMS 首码等待超时，当前 attempt 将放弃并重新申请新号码。`,
+                  'warn'
+                );
               } else {
                 await addLog(`第 ${targetRun}/${totalRuns} 轮第 ${attemptRun} 次尝试失败：${reason}`, 'error');
               }
