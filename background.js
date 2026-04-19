@@ -124,6 +124,7 @@ const {
   findOrCreateSmsActivation: heroFindOrCreateSmsActivation,
   finishActivation: heroFinishSmsActivation,
   pollSmsVerificationCode: heroPollSmsVerificationCode,
+  prepareActivationForSmsRequest: heroPrepareActivationForSmsRequest,
 } = self.HeroSmsUtils || {};
 const {
   isRecoverableStep9AuthFailure,
@@ -353,6 +354,8 @@ const DEFAULT_STATE = {
   preferredIcloudHost: '',
   currentHeroSmsActivationId: null,
   currentHeroSmsPhoneNumber: null,
+  currentHeroSmsActivationStartedAt: null,
+  currentHeroSmsRequestStartedAt: null,
 };
 
 function normalizeAutoRunDelayMinutes(value) {
@@ -3912,6 +3915,7 @@ const phoneVerificationHelpers = self.MultiPageBackgroundPhoneVerification?.crea
   heroFindOrCreateSmsActivation,
   heroFinishSmsActivation,
   heroPollSmsVerificationCode,
+  heroPrepareActivationForSmsRequest,
   isHotmailProvider,
   isHeroSmsFirstCodeTimeoutError,
   isPhoneMaxUsageExceededError,
@@ -4039,7 +4043,7 @@ function isHeroSmsFirstCodeTimeoutError(error) {
     return loggingStatus.isHeroSmsFirstCodeTimeoutError(error);
   }
   const message = getErrorMessage(error);
-  return /HERO_SMS_FIRST_CODE_TIMEOUT::|hero[_\s-]*sms[_\s-]*first[_\s-]*code[_\s-]*timeout/i.test(message);
+  return /HERO_SMS_(?:FIRST|NEXT)_CODE_TIMEOUT::|hero[_\s-]*sms(?:[_\s-]*(?:first|next))?[_\s-]*code[_\s-]*timeout/i.test(message);
 }
 
 function getLoginAuthStateLabel(state) {

@@ -549,7 +549,7 @@
                 await addLog(`第 ${targetRun}/${totalRuns} 轮第 ${attemptRun} 次尝试需要整轮重开：${reason}`, 'warn');
               } else if (blockedByHeroSmsFirstCodeTimeout) {
                 await addLog(
-                  `第 ${targetRun}/${totalRuns} 轮第 ${attemptRun} 次尝试触发 Hero-SMS 首码等待超时，当前 attempt 将放弃并重新申请新号码。`,
+                  `第 ${targetRun}/${totalRuns} 轮第 ${attemptRun} 次尝试触发 Hero-SMS 验证码等待超时，当前 attempt 将放弃并重新申请新号码。`,
                   'warn'
                 );
               } else {

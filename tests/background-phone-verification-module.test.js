@@ -16,6 +16,13 @@ test('phone verification module exposes a factory', () => {
   assert.equal(typeof api?.createPhoneVerificationHelpers, 'function');
 });
 
+test('background default state keeps hero sms activation and sms request runtime fields', () => {
+  assert.match(backgroundSource, /currentHeroSmsActivationId:\s*null/);
+  assert.match(backgroundSource, /currentHeroSmsPhoneNumber:\s*null/);
+  assert.match(backgroundSource, /currentHeroSmsActivationStartedAt:\s*null/);
+  assert.match(backgroundSource, /currentHeroSmsRequestStartedAt:\s*null/);
+});
+
 test('phone verification helper no-ops when current page is not add-phone', async () => {
   const executeResults = [
     { url: 'https://auth.openai.com/authorize', addPhonePage: false },
@@ -63,16 +70,20 @@ test('phone verification helper no-ops when current page is not add-phone', asyn
   });
 });
 
-test('phone verification helper completes add-phone flow with hero sms activation', async () => {
+test('phone verification helper completes add-phone flow with hero sms activation and records sms request time', async () => {
   const logs = [];
   const stateUpdates = [];
   const broadcasts = [];
+  const pollCalls = [];
+  const prepareCalls = [];
   let runtimeState = {
     heroSmsEnabled: true,
     heroSmsApiKey: 'demo-key',
     heroSmsCountry: '52',
     currentHeroSmsActivationId: null,
     currentHeroSmsPhoneNumber: null,
+    currentHeroSmsActivationStartedAt: null,
+    currentHeroSmsRequestStartedAt: null,
   };
 
   const executeResults = [
@@ -123,7 +134,15 @@ test('phone verification helper completes add-phone flow with hero sms activatio
       phoneNumber: '8520001111',
     }),
     heroFinishSmsActivation: async () => {},
-    heroPollSmsVerificationCode: async (_apiKey, activationId, onLog, step) => {
+    heroPrepareActivationForSmsRequest: async (apiKey, activationId, phoneNumber) => {
+      prepareCalls.push({ apiKey, activationId, phoneNumber });
+      return {
+        requestMode: 'first',
+        receivedCodeCount: 0,
+      };
+    },
+    heroPollSmsVerificationCode: async (_apiKey, activationId, onLog, step, _stopCheck, options = {}) => {
+      pollCalls.push({ activationId, options });
       await onLog(step, `activation=${activationId}`, 'info');
       return '654321';
     },
@@ -148,7 +167,17 @@ test('phone verification helper completes add-phone flow with hero sms activatio
   assert.equal(result.phoneNumber, '8520001111');
   assert.ok(stateUpdates.some((payload) => payload.currentHeroSmsActivationId === 'act-1'));
   assert.ok(stateUpdates.some((payload) => payload.currentHeroSmsPhoneNumber === '8520001111'));
-  assert.ok(broadcasts.some((payload) => payload.currentHeroSmsActivationId === 'act-1'));
+  assert.ok(stateUpdates.some((payload) => typeof payload.currentHeroSmsRequestStartedAt === 'number' && payload.currentHeroSmsRequestStartedAt > 0));
+  assert.ok(broadcasts.some((payload) => typeof payload.currentHeroSmsRequestStartedAt === 'number' && payload.currentHeroSmsRequestStartedAt > 0));
+  assert.deepStrictEqual(prepareCalls, [{
+    apiKey: 'demo-key',
+    activationId: 'act-1',
+    phoneNumber: '8520001111',
+  }]);
+  assert.equal(pollCalls.length, 1);
+  assert.equal(pollCalls[0].activationId, 'act-1');
+  assert.equal(typeof pollCalls[0].options.smsRequestStartedAt, 'number');
+  assert.ok(pollCalls[0].options.smsRequestStartedAt > 0);
   assert.ok(logs.some(({ message }) => /已获取手机号/.test(message)));
   assert.ok(logs.some(({ message }) => /已提交短信验证码/.test(message)));
 });
@@ -176,6 +205,8 @@ test('phone verification cleanup clears runtime state without finishing activati
       heroSmsApiKey: 'demo-key',
       currentHeroSmsActivationId: 'act-keep',
       currentHeroSmsPhoneNumber: '8520001111',
+      currentHeroSmsActivationStartedAt: 1700000000000,
+      currentHeroSmsRequestStartedAt: 1700000001000,
     }),
     heroFindOrCreateSmsActivation: async () => ({}),
     heroFinishSmsActivation: async () => {
@@ -198,6 +229,8 @@ test('phone verification cleanup clears runtime state without finishing activati
       heroSmsApiKey: 'demo-key',
       currentHeroSmsActivationId: 'act-keep',
       currentHeroSmsPhoneNumber: '8520001111',
+      currentHeroSmsActivationStartedAt: 1700000000000,
+      currentHeroSmsRequestStartedAt: 1700000001000,
     },
   });
 
@@ -208,7 +241,8 @@ test('phone verification cleanup clears runtime state without finishing activati
   assert.equal(finishCalls, 0);
   assert.ok(stateUpdates.some((payload) => payload.currentHeroSmsActivationId === null));
   assert.ok(stateUpdates.some((payload) => payload.currentHeroSmsPhoneNumber === null));
-  assert.ok(broadcasts.some((payload) => payload.currentHeroSmsActivationId === null));
+  assert.ok(stateUpdates.some((payload) => payload.currentHeroSmsRequestStartedAt === null));
+  assert.ok(broadcasts.some((payload) => payload.currentHeroSmsRequestStartedAt === null));
 });
 
 test('phone verification helper handles phone_max_usage_exceeded by finishing activation and clearing runtime state', async () => {
@@ -234,6 +268,8 @@ test('phone verification helper handles phone_max_usage_exceeded by finishing ac
       heroSmsApiKey: 'demo-key',
       currentHeroSmsActivationId: 'act-limit',
       currentHeroSmsPhoneNumber: '8520001111',
+      currentHeroSmsActivationStartedAt: 1700000000000,
+      currentHeroSmsRequestStartedAt: 1700000001000,
       currentHotmailAccountId: null,
     }),
     heroFindOrCreateSmsActivation: async () => ({}),
@@ -256,16 +292,19 @@ test('phone verification helper handles phone_max_usage_exceeded by finishing ac
     heroSmsApiKey: 'demo-key',
     currentHeroSmsActivationId: 'act-limit',
     currentHeroSmsPhoneNumber: '8520001111',
+    currentHeroSmsActivationStartedAt: 1700000000000,
+    currentHeroSmsRequestStartedAt: 1700000001000,
     currentHotmailAccountId: null,
   });
 
   assert.equal(finishedActivationId, 'act-limit');
   assert.ok(stateUpdates.some((payload) => payload.currentHeroSmsActivationId === null));
+  assert.ok(stateUpdates.some((payload) => payload.currentHeroSmsRequestStartedAt === null));
   assert.ok(logs.some(({ message }) => /phone_max_usage_exceeded/.test(message)));
   assert.ok(logs.some(({ message }) => /已调用 Hero-SMS 完成激活/.test(message)));
 });
 
-test('phone verification helper clears runtime state when hero sms first code timeout happens', async () => {
+test('phone verification helper clears runtime state when hero sms code timeout happens', async () => {
   const stateUpdates = [];
   const broadcasts = [];
   let finishCalls = 0;
@@ -300,6 +339,8 @@ test('phone verification helper clears runtime state when hero sms first code ti
       heroSmsCountry: '852',
       currentHeroSmsActivationId: 'act-timeout',
       currentHeroSmsPhoneNumber: '8520009999',
+      currentHeroSmsActivationStartedAt: 1700000000000,
+      currentHeroSmsRequestStartedAt: 1700000001000,
     }),
     heroFindOrCreateSmsActivation: async () => ({
       activationId: 'should-not-run',
@@ -308,10 +349,14 @@ test('phone verification helper clears runtime state when hero sms first code ti
     heroFinishSmsActivation: async () => {
       finishCalls += 1;
     },
+    heroPrepareActivationForSmsRequest: async () => ({
+      requestMode: 'retry',
+      receivedCodeCount: 1,
+    }),
     heroPollSmsVerificationCode: async () => {
-      throw new Error('HERO_SMS_FIRST_CODE_TIMEOUT::no_first_sms_in_125s');
+      throw new Error('HERO_SMS_NEXT_CODE_TIMEOUT::no_next_sms_in_180s');
     },
-    isHeroSmsFirstCodeTimeoutError: (error) => /HERO_SMS_FIRST_CODE_TIMEOUT::/.test(error?.message || String(error || '')),
+    isHeroSmsFirstCodeTimeoutError: (error) => /HERO_SMS_(?:FIRST|NEXT)_CODE_TIMEOUT::/.test(error?.message || String(error || '')),
     isHotmailProvider: () => false,
     isLuckmailProvider: () => false,
     patchHotmailAccount: async () => {},
@@ -330,12 +375,15 @@ test('phone verification helper clears runtime state when hero sms first code ti
       heroSmsCountry: '852',
       currentHeroSmsActivationId: 'act-timeout',
       currentHeroSmsPhoneNumber: '8520009999',
+      currentHeroSmsActivationStartedAt: 1700000000000,
+      currentHeroSmsRequestStartedAt: 1700000001000,
     }, 303),
-    /HERO_SMS_FIRST_CODE_TIMEOUT::/
+    /HERO_SMS_NEXT_CODE_TIMEOUT::/
   );
 
   assert.equal(finishCalls, 0);
   assert.ok(stateUpdates.some((payload) => payload.currentHeroSmsActivationId === null));
   assert.ok(stateUpdates.some((payload) => payload.currentHeroSmsPhoneNumber === null));
-  assert.ok(broadcasts.some((payload) => payload.currentHeroSmsActivationId === null));
+  assert.ok(stateUpdates.some((payload) => payload.currentHeroSmsRequestStartedAt === null));
+  assert.ok(broadcasts.some((payload) => payload.currentHeroSmsRequestStartedAt === null));
 });

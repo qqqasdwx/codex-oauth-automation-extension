@@ -24,10 +24,11 @@ test('logging/status module exposes a factory', () => {
     STOP_ERROR_MESSAGE: '流程已被用户停止。',
   });
   assert.equal(typeof status?.isPhoneMaxUsageExceededError, 'function');
+  assert.equal(typeof status?.isHeroSmsCodeTimeoutError, 'function');
   assert.equal(typeof status?.isHeroSmsFirstCodeTimeoutError, 'function');
 });
 
-test('logging/status helper recognizes hero sms first code timeout errors', () => {
+test('logging/status helper recognizes hero sms first and next code timeout errors', () => {
   const source = fs.readFileSync('background/logging-status.js', 'utf8');
   const globalScope = {};
   const api = new Function('self', `${source}; return self.MultiPageBackgroundLoggingStatus;`)(globalScope);
@@ -42,6 +43,8 @@ test('logging/status helper recognizes hero sms first code timeout errors', () =
     STOP_ERROR_MESSAGE: '流程已被用户停止。',
   });
 
-  assert.equal(status.isHeroSmsFirstCodeTimeoutError(new Error('HERO_SMS_FIRST_CODE_TIMEOUT::no_first_sms_in_125s')), true);
+  assert.equal(status.isHeroSmsCodeTimeoutError(new Error('HERO_SMS_FIRST_CODE_TIMEOUT::no_first_sms_in_120s')), true);
+  assert.equal(status.isHeroSmsCodeTimeoutError(new Error('HERO_SMS_NEXT_CODE_TIMEOUT::no_next_sms_in_180s')), true);
+  assert.equal(status.isHeroSmsFirstCodeTimeoutError(new Error('HERO_SMS_NEXT_CODE_TIMEOUT::no_next_sms_in_180s')), true);
   assert.equal(status.isHeroSmsFirstCodeTimeoutError(new Error('PHONE_MAX_USAGE_EXCEEDED::phone_max_usage_exceeded')), false);
 });

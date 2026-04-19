@@ -207,7 +207,7 @@ test('step 9 handles phone_max_usage_exceeded through dedicated recovery flow', 
   assert.equal(handledCount, 1);
 });
 
-test('step 9 surfaces hero sms first code timeout for outer retry flow', async () => {
+test('step 9 surfaces hero sms code timeout for outer retry flow', async () => {
   const logs = [];
   let phoneMaxHandled = 0;
 
@@ -221,7 +221,7 @@ test('step 9 surfaces hero sms first code timeout for outer retry flow', async (
     completeStepFromBackground: async () => {},
     ensureStep8SignupPageReady: async () => {},
     ensurePhoneVerificationIfNeeded: async () => {
-      throw new Error('HERO_SMS_FIRST_CODE_TIMEOUT::no_first_sms_in_125s');
+      throw new Error('HERO_SMS_NEXT_CODE_TIMEOUT::no_next_sms_in_180s');
     },
     getOAuthFlowStepTimeoutMs: async (timeoutMs) => timeoutMs,
     getStep8CallbackUrlFromNavigation: () => '',
@@ -247,7 +247,7 @@ test('step 9 surfaces hero sms first code timeout for outer retry flow', async (
     handlePhoneMaxUsageExceededFlow: async () => {
       phoneMaxHandled += 1;
     },
-    isHeroSmsFirstCodeTimeoutError: (error) => /HERO_SMS_FIRST_CODE_TIMEOUT::/.test(error?.message || String(error || '')),
+    isHeroSmsFirstCodeTimeoutError: (error) => /HERO_SMS_(?:FIRST|NEXT)_CODE_TIMEOUT::/.test(error?.message || String(error || '')),
     isPhoneMaxUsageExceededError: () => false,
     waitForStep8ClickEffect: async () => ({ progressed: false, reason: 'no_effect' }),
     waitForStep8Ready: async () => ({ consentReady: true, url: 'https://auth.openai.com/authorize' }),
@@ -262,9 +262,9 @@ test('step 9 surfaces hero sms first code timeout for outer retry flow', async (
       oauthUrl: 'https://auth.openai.com/authorize',
       heroSmsEnabled: true,
     }),
-    /HERO_SMS_FIRST_CODE_TIMEOUT::no_first_sms_in_125s/
+    /HERO_SMS_NEXT_CODE_TIMEOUT::no_next_sms_in_180s/
   );
 
   assert.equal(phoneMaxHandled, 0);
-  assert.ok(logs.some(({ message }) => /125 秒内未收到任何验证码/.test(message)));
+  assert.ok(logs.some(({ message }) => /等待验证码超时/.test(message)));
 });

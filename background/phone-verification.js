@@ -13,6 +13,7 @@
       heroFindOrCreateSmsActivation,
       heroFinishSmsActivation,
       heroPollSmsVerificationCode,
+      heroPrepareActivationForSmsRequest,
       isHotmailProvider,
       isHeroSmsFirstCodeTimeoutError: sharedIsHeroSmsFirstCodeTimeoutError,
       isPhoneMaxUsageExceededError: sharedIsPhoneMaxUsageExceededError,
@@ -25,7 +26,8 @@
     } = deps;
 
     const PHONE_MAX_USAGE_EXCEEDED_ERROR_CODE = 'PHONE_MAX_USAGE_EXCEEDED::phone_max_usage_exceeded';
-    const HERO_SMS_FIRST_CODE_TIMEOUT_ERROR_CODE = 'HERO_SMS_FIRST_CODE_TIMEOUT::no_first_sms_in_125s';
+    const HERO_SMS_FIRST_CODE_TIMEOUT_ERROR_CODE = 'HERO_SMS_FIRST_CODE_TIMEOUT::no_first_sms_in_120s';
+    const HERO_SMS_NEXT_CODE_TIMEOUT_ERROR_CODE = 'HERO_SMS_NEXT_CODE_TIMEOUT::no_next_sms_in_180s';
     const ADD_PHONE_URL_PATTERN = /\/add-phone(?:[/?#]|$)/i;
     const PHONE_INPUT_SELECTOR = [
       'input#tel',
@@ -60,7 +62,7 @@
 
     function fallbackIsHeroSmsFirstCodeTimeoutError(error) {
       const message = getErrorMessage(error);
-      return /HERO_SMS_FIRST_CODE_TIMEOUT::|hero[_\s-]*sms[_\s-]*first[_\s-]*code[_\s-]*timeout/i.test(message);
+      return /HERO_SMS_(?:FIRST|NEXT)_CODE_TIMEOUT::|hero[_\s-]*sms(?:[_\s-]*(?:first|next))?[_\s-]*code[_\s-]*timeout/i.test(message);
     }
 
     const isHeroSmsFirstCodeTimeoutError = typeof sharedIsHeroSmsFirstCodeTimeoutError === 'function'
@@ -86,6 +88,10 @@
       if (updates.currentHeroSmsActivationStartedAt !== undefined) {
         const normalizedStartedAt = Math.floor(Number(updates.currentHeroSmsActivationStartedAt) || 0);
         payload.currentHeroSmsActivationStartedAt = normalizedStartedAt > 0 ? normalizedStartedAt : null;
+      }
+      if (updates.currentHeroSmsRequestStartedAt !== undefined) {
+        const normalizedRequestStartedAt = Math.floor(Number(updates.currentHeroSmsRequestStartedAt) || 0);
+        payload.currentHeroSmsRequestStartedAt = normalizedRequestStartedAt > 0 ? normalizedRequestStartedAt : null;
       }
 
       if (!Object.keys(payload).length) {
@@ -379,6 +385,8 @@
       const activationId = String(latestState?.currentHeroSmsActivationId || '').trim();
       const phoneNumber = String(latestState?.currentHeroSmsPhoneNumber || '').trim();
       const apiKey = String(latestState?.heroSmsApiKey || '').trim();
+      const activationStartedAt = Math.floor(Number(latestState?.currentHeroSmsActivationStartedAt) || 0);
+      const requestStartedAt = Math.floor(Number(latestState?.currentHeroSmsRequestStartedAt) || 0);
 
       let finished = false;
       if (finish && apiKey && activationId) {
@@ -395,17 +403,18 @@
         }
       }
 
-      if (activationId || phoneNumber) {
+      if (activationId || phoneNumber || activationStartedAt || requestStartedAt) {
         await setHeroSmsRuntimeState({
           currentHeroSmsActivationId: null,
           currentHeroSmsPhoneNumber: null,
           currentHeroSmsActivationStartedAt: null,
+          currentHeroSmsRequestStartedAt: null,
         });
       }
 
       return {
         finished,
-        cleared: Boolean(activationId || phoneNumber),
+        cleared: Boolean(activationId || phoneNumber || activationStartedAt || requestStartedAt),
       };
     }
 
@@ -468,13 +477,15 @@
       let activationId = String(currentState.currentHeroSmsActivationId || '').trim();
       let phoneNumber = String(currentState.currentHeroSmsPhoneNumber || '').trim();
       let activationStartedAt = Math.floor(Number(currentState.currentHeroSmsActivationStartedAt) || 0);
+      let smsRequestStartedAt = Math.floor(Number(currentState.currentHeroSmsRequestStartedAt) || 0);
 
-      if (pageState.phoneInputVisible) {
+      async function ensureActivationReady() {
         if (!activationId || !phoneNumber) {
           const activation = await heroFindOrCreateSmsActivation(currentState.heroSmsApiKey, currentState.heroSmsCountry);
           activationId = String(activation?.activationId || '').trim();
           phoneNumber = String(activation?.phoneNumber || '').trim();
           activationStartedAt = Date.now();
+          smsRequestStartedAt = 0;
           if (!activationId || !phoneNumber) {
             throw new Error('步骤 9：Hero-SMS 未返回可用的手机号激活信息。');
           }
@@ -483,36 +494,85 @@
             currentHeroSmsActivationId: activationId,
             currentHeroSmsPhoneNumber: phoneNumber,
             currentHeroSmsActivationStartedAt: activationStartedAt,
+            currentHeroSmsRequestStartedAt: null,
           });
           await addLog(`步骤 9：已获取手机号 ${normalizeOpenAiPhoneNumber(phoneNumber)}（激活ID: ${activationId}）。`, 'info');
-        } else {
-          if (!activationStartedAt) {
-            activationStartedAt = Date.now();
-            await setHeroSmsRuntimeState({
-              currentHeroSmsActivationStartedAt: activationStartedAt,
-            });
-          }
-          await addLog(`步骤 9：复用当前 Hero-SMS 激活手机号 ${normalizeOpenAiPhoneNumber(phoneNumber)}。`, 'info');
+          return;
         }
 
-        await fillPhoneNumberAndSubmit(tabId, normalizeOpenAiPhoneNumber(phoneNumber));
-        await addLog(`步骤 9：已填入手机号 ${normalizeOpenAiPhoneNumber(phoneNumber)}，正在等待短信验证码输入框...`, 'info');
-        pageState = await waitForPhoneVerificationStage(tabId, 'code', options.codeStageTimeoutMs || 60000);
-      } else if (!pageState.verificationInputVisible) {
-        pageState = await waitForPhoneVerificationStage(tabId, 'phone_or_code', options.pageReadyTimeoutMs || 60000);
+        if (!activationStartedAt) {
+          activationStartedAt = Date.now();
+          await setHeroSmsRuntimeState({
+            currentHeroSmsActivationStartedAt: activationStartedAt,
+          });
+        }
+
+        await addLog(`步骤 9：复用当前 Hero-SMS 激活手机号 ${normalizeOpenAiPhoneNumber(phoneNumber)}。`, 'info');
       }
 
-      if (!activationId || !phoneNumber) {
+      async function prepareHeroSmsRequestForPageSend() {
+        if (typeof heroPrepareActivationForSmsRequest !== 'function') {
+          return null;
+        }
+
+        const prepareResult = await heroPrepareActivationForSmsRequest(
+          currentState.heroSmsApiKey,
+          activationId,
+          phoneNumber
+        );
+
+        if (prepareResult?.requestMode === 'retry') {
+          await addLog(
+            `步骤 9：当前号码历史已接过 ${prepareResult.receivedCodeCount} 次验证码，已通知 Hero-SMS 进入等待新短信状态。`,
+            'info'
+          );
+        }
+
+        return prepareResult;
+      }
+
+      async function submitPhoneNumberAndStartSmsTimer() {
+        await ensureActivationReady();
+        await prepareHeroSmsRequestForPageSend();
+        await fillPhoneNumberAndSubmit(tabId, normalizeOpenAiPhoneNumber(phoneNumber));
+        smsRequestStartedAt = Date.now();
+        await setHeroSmsRuntimeState({
+          currentHeroSmsRequestStartedAt: smsRequestStartedAt,
+        });
+        await addLog(`步骤 9：已填入手机号 ${normalizeOpenAiPhoneNumber(phoneNumber)}，正在等待短信验证码输入框...`, 'info');
+        pageState = await waitForPhoneVerificationStage(tabId, 'code', options.codeStageTimeoutMs || 60000);
+      }
+
+      if (pageState.phoneInputVisible) {
+        await submitPhoneNumberAndStartSmsTimer();
+      } else if (!pageState.verificationInputVisible) {
+        pageState = await waitForPhoneVerificationStage(tabId, 'phone_or_code', options.pageReadyTimeoutMs || 60000);
+        if (pageState?.phoneInputVisible) {
+          await submitPhoneNumberAndStartSmsTimer();
+        }
+      }
+
+      if (!activationId || !phoneNumber || !smsRequestStartedAt) {
         const latestState = await getState();
-        activationId = String(latestState.currentHeroSmsActivationId || '').trim();
-        phoneNumber = String(latestState.currentHeroSmsPhoneNumber || '').trim();
+        activationId = String(latestState.currentHeroSmsActivationId || activationId || '').trim();
+        phoneNumber = String(latestState.currentHeroSmsPhoneNumber || phoneNumber || '').trim();
         activationStartedAt = Math.floor(Number(latestState.currentHeroSmsActivationStartedAt) || activationStartedAt || 0);
+        smsRequestStartedAt = Math.floor(Number(latestState.currentHeroSmsRequestStartedAt) || smsRequestStartedAt || 0);
       }
       if (!activationId || !phoneNumber) {
         throw new Error('步骤 9：当前短信验证页缺少有效的 Hero-SMS 激活信息，请重新开始本轮。');
       }
       if (!activationStartedAt) {
         activationStartedAt = Date.now();
+        await setHeroSmsRuntimeState({
+          currentHeroSmsActivationStartedAt: activationStartedAt,
+        });
+      }
+      if (!smsRequestStartedAt) {
+        smsRequestStartedAt = Date.now();
+        await setHeroSmsRuntimeState({
+          currentHeroSmsRequestStartedAt: smsRequestStartedAt,
+        });
       }
 
       let verificationCode = '';
@@ -533,7 +593,7 @@
           },
           {
             initialPhoneNumber: phoneNumber,
-            firstCodeTimeoutStartedAt: activationStartedAt,
+            smsRequestStartedAt,
           }
         );
       } catch (error) {
@@ -543,6 +603,8 @@
               heroSmsApiKey: currentState.heroSmsApiKey,
               currentHeroSmsActivationId: activationId,
               currentHeroSmsPhoneNumber: phoneNumber,
+              currentHeroSmsActivationStartedAt: activationStartedAt,
+              currentHeroSmsRequestStartedAt: smsRequestStartedAt,
             },
             logFailure: true,
           }).catch(() => { });
@@ -570,6 +632,7 @@
 
     return {
       HERO_SMS_FIRST_CODE_TIMEOUT_ERROR_CODE,
+      HERO_SMS_NEXT_CODE_TIMEOUT_ERROR_CODE,
       PHONE_MAX_USAGE_EXCEEDED_ERROR_CODE,
       cleanupHeroSmsActivation,
       ensurePhoneVerificationIfNeeded,

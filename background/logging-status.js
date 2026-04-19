@@ -72,9 +72,13 @@
       return /PHONE_MAX_USAGE_EXCEEDED::|phone[_\s-]*max[_\s-]*usage[_\s-]*exceeded/i.test(message);
     }
 
-    function isHeroSmsFirstCodeTimeoutError(error) {
+    function isHeroSmsCodeTimeoutError(error) {
       const message = getErrorMessage(error);
-      return /HERO_SMS_FIRST_CODE_TIMEOUT::|hero[_\s-]*sms[_\s-]*first[_\s-]*code[_\s-]*timeout/i.test(message);
+      return /HERO_SMS_(?:FIRST|NEXT)_CODE_TIMEOUT::|hero[_\s-]*sms(?:[_\s-]*(?:first|next))?[_\s-]*code[_\s-]*timeout/i.test(message);
+    }
+
+    function isHeroSmsFirstCodeTimeoutError(error) {
+      return isHeroSmsCodeTimeoutError(error);
     }
 
     function getLoginAuthStateLabel(state) {
@@ -165,6 +169,7 @@
       addLog,
       getAutoRunStatusPayload,
       isAddPhoneAuthFailure,
+      isHeroSmsCodeTimeoutError,
       isHeroSmsFirstCodeTimeoutError,
       isPhoneMaxUsageExceededError,
       getErrorMessage,

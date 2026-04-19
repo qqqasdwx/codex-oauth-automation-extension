@@ -272,7 +272,7 @@
               }
             } else if (typeof isHeroSmsFirstCodeTimeoutError === 'function' && isHeroSmsFirstCodeTimeoutError(err)) {
               try {
-                await addLog('步骤 9：当前 Hero-SMS 号码在 125 秒内未收到任何验证码，本次 attempt 将结束并等待外层重试。', 'warn');
+                await addLog('步骤 9：当前 Hero-SMS 号码等待验证码超时，本次 attempt 将结束并等待外层重试。', 'warn');
               } catch (_) {
                 // Preserve original first-code-timeout error.
               }

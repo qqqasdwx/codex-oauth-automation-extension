@@ -169,7 +169,7 @@ test('auto-run controller skips phone_max_usage_exceeded to the next round witho
   assert.equal(runtime.state.autoRunSessionId, 0);
 });
 
-test('auto-run controller retries the same round on hero sms first code timeout', async () => {
+test('auto-run controller retries the same round on hero sms code timeout', async () => {
   const events = {
     logs: [],
     broadcasts: [],
@@ -271,7 +271,7 @@ test('auto-run controller retries the same round on hero sms first code timeout'
     getStopRequested: () => false,
     hasSavedProgress: () => false,
     isAddPhoneAuthFailure: () => false,
-    isHeroSmsFirstCodeTimeoutError: (error) => /HERO_SMS_FIRST_CODE_TIMEOUT::/.test(error?.message || String(error || '')),
+    isHeroSmsFirstCodeTimeoutError: (error) => /HERO_SMS_(?:FIRST|NEXT)_CODE_TIMEOUT::/.test(error?.message || String(error || '')),
     isPhoneMaxUsageExceededError: () => false,
     isRestartCurrentAttemptError: () => false,
     isStopError: (error) => (error?.message || String(error || '')) === '流程已被用户停止。',
@@ -289,7 +289,7 @@ test('auto-run controller retries the same round on hero sms first code timeout'
     runAutoSequenceFromStep: async () => {
       events.runCalls += 1;
       if (events.runCalls === 1) {
-        throw new Error('HERO_SMS_FIRST_CODE_TIMEOUT::no_first_sms_in_125s');
+        throw new Error('HERO_SMS_NEXT_CODE_TIMEOUT::no_next_sms_in_180s');
       }
     },
     runtime,
@@ -323,15 +323,15 @@ test('auto-run controller retries the same round on hero sms first code timeout'
     mode: 'restart',
   });
 
-  assert.equal(events.runCalls, 2, 'first code timeout should retry within the same round');
+  assert.equal(events.runCalls, 2, 'hero sms code timeout should retry within the same round');
   assert.ok(events.broadcasts.some(({ phase }) => phase === 'retrying'));
   assert.equal(events.accountRecords.length, 0);
-  assert.ok(events.logs.some(({ message }) => /Hero-SMS 首码等待超时/.test(message)));
+  assert.ok(events.logs.some(({ message }) => /Hero-SMS 验证码等待超时/.test(message)));
   assert.equal(runtime.state.autoRunActive, false);
   assert.equal(runtime.state.autoRunSessionId, 0);
 });
 
-test('auto-run controller stops immediately on hero sms first code timeout when retries are disabled', async () => {
+test('auto-run controller stops immediately on hero sms code timeout when retries are disabled', async () => {
   const events = {
     logs: [],
     broadcasts: [],
@@ -433,7 +433,7 @@ test('auto-run controller stops immediately on hero sms first code timeout when 
     getStopRequested: () => false,
     hasSavedProgress: () => false,
     isAddPhoneAuthFailure: () => false,
-    isHeroSmsFirstCodeTimeoutError: (error) => /HERO_SMS_FIRST_CODE_TIMEOUT::/.test(error?.message || String(error || '')),
+    isHeroSmsFirstCodeTimeoutError: (error) => /HERO_SMS_(?:FIRST|NEXT)_CODE_TIMEOUT::/.test(error?.message || String(error || '')),
     isPhoneMaxUsageExceededError: () => false,
     isRestartCurrentAttemptError: () => false,
     isStopError: (error) => (error?.message || String(error || '')) === '流程已被用户停止。',
@@ -450,7 +450,7 @@ test('auto-run controller stops immediately on hero sms first code timeout when 
     },
     runAutoSequenceFromStep: async () => {
       events.runCalls += 1;
-      throw new Error('HERO_SMS_FIRST_CODE_TIMEOUT::no_first_sms_in_125s');
+      throw new Error('HERO_SMS_NEXT_CODE_TIMEOUT::no_next_sms_in_180s');
     },
     runtime,
     setState: async (updates = {}) => {
@@ -488,7 +488,7 @@ test('auto-run controller stops immediately on hero sms first code timeout when 
   assert.equal(events.broadcasts.some(({ phase }) => phase === 'stopped'), true);
   assert.equal(events.accountRecords.length, 1);
   assert.equal(events.accountRecords[0].status, 'failed');
-  assert.match(events.accountRecords[0].reason, /HERO_SMS_FIRST_CODE_TIMEOUT/);
+  assert.match(events.accountRecords[0].reason, /HERO_SMS_NEXT_CODE_TIMEOUT/);
   assert.equal(runtime.state.autoRunActive, false);
   assert.equal(runtime.state.autoRunSessionId, 0);
 });
