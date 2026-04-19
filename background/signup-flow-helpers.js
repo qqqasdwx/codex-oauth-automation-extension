@@ -5,6 +5,7 @@
     const {
       buildGeneratedAliasEmail,
       chrome,
+      closeConflictingTabsForSource,
       ensureContentScriptReadyOnTab,
       ensureHotmailAccountForFlow,
       ensureOutlookEmailAccountForFlow,
@@ -23,6 +24,13 @@
       SIGNUP_PAGE_INJECT_FILES,
       waitForTabUrlMatch,
     } = deps;
+
+    async function resetSignupEntryEnvironment() {
+      if (typeof closeConflictingTabsForSource !== 'function') {
+        return;
+      }
+      await closeConflictingTabsForSource('signup-page', SIGNUP_ENTRY_URL);
+    }
 
     async function openSignupEntryTab(step = 1) {
       const tabId = await reuseOrCreateTab('signup-page', SIGNUP_ENTRY_URL, {
@@ -228,6 +236,7 @@
       finalizeSignupPasswordSubmitInTab,
       ensureSignupPasswordPageReadyInTab,
       openSignupEntryTab,
+      resetSignupEntryEnvironment,
       resolveSignupEmailForFlow,
     };
   }

@@ -15,3 +15,23 @@ test('signup flow helper module exposes a factory', () => {
 
   assert.equal(typeof api?.createSignupFlowHelpers, 'function');
 });
+
+test('signup flow helper can reset signup entry environment by closing conflicting signup tabs', async () => {
+  const source = fs.readFileSync('background/signup-flow-helpers.js', 'utf8');
+  const globalScope = {};
+  const api = new Function('self', `${source}; return self.MultiPageSignupFlowHelpers;`)(globalScope);
+
+  const calls = [];
+  const helpers = api.createSignupFlowHelpers({
+    closeConflictingTabsForSource: async (sourceName, url) => {
+      calls.push([sourceName, url]);
+    },
+    SIGNUP_ENTRY_URL: 'https://chatgpt.com',
+  });
+
+  await helpers.resetSignupEntryEnvironment();
+
+  assert.deepStrictEqual(calls, [
+    ['signup-page', 'https://chatgpt.com'],
+  ]);
+});

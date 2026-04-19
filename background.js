@@ -5925,6 +5925,7 @@ const signupFlowHelpers = self.MultiPageSignupFlowHelpers?.createSignupFlowHelpe
   addLog,
   buildGeneratedAliasEmail,
   chrome,
+  closeConflictingTabsForSource,
   ensureContentScriptReadyOnTab,
   ensureHotmailAccountForFlow,
   ensureOutlookEmailAccountForFlow,
@@ -5980,6 +5981,8 @@ const step1Executor = self.MultiPageBackgroundStep1?.createStep1Executor({
   addLog,
   completeStepFromBackground,
   openSignupEntryTab,
+  resetSignupEntryEnvironment: signupFlowHelpers.resetSignupEntryEnvironment,
+  runPreStep1CookieCleanup,
 });
 const step2Executor = self.MultiPageBackgroundStep2?.createStep2Executor({
   addLog,
@@ -6493,17 +6496,23 @@ async function removeCookieDirectly(cookie) {
   }
 }
 
-async function runPreStep6CookieCleanup() {
-  await addLog(
-    `步骤 6：开始前等待 ${Math.round(STEP6_PRE_LOGIN_COOKIE_CLEAR_DELAY_MS / 1000)} 秒，然后直接删除 ChatGPT / OpenAI cookies...`,
-    'info'
-  );
-
-  await sleepWithStop(STEP6_PRE_LOGIN_COOKIE_CLEAR_DELAY_MS);
-
+async function clearOpenAiCookiesForStep({
+  step,
+  preDelayMs = 0,
+  startMessage = '',
+  successMessage = '',
+}) {
   if (!chrome.cookies?.getAll || !chrome.cookies?.remove) {
-    await addLog('步骤 6：当前浏览器不支持 cookies API，无法直接删除 cookies。', 'warn');
+    await addLog(`步骤 ${step}：当前浏览器不支持 cookies API，无法直接删除 cookies。`, 'warn');
     return;
+  }
+
+  if (startMessage) {
+    await addLog(startMessage, 'info');
+  }
+
+  if (preDelayMs > 0) {
+    await sleepWithStop(preDelayMs);
   }
 
   const cookies = await collectCookiesForPreLoginCleanup();
@@ -6523,11 +6532,34 @@ async function runPreStep6CookieCleanup() {
         origins: PRE_LOGIN_COOKIE_CLEAR_ORIGINS,
       });
     } catch (err) {
-      await addLog(`步骤 6：browsingData 补扫 cookies 失败：${getErrorMessage(err)}`, 'warn');
+      await addLog(`步骤 ${step}：browsingData 补扫 cookies 失败：${getErrorMessage(err)}`, 'warn');
     }
   }
 
-  await addLog(`步骤 6：已直接删除 ${removedCount} 个 ChatGPT / OpenAI cookies，准备继续获取链接并登录。`, 'ok');
+  const resolvedSuccessMessage = typeof successMessage === 'function'
+    ? successMessage(removedCount)
+    : successMessage;
+  await addLog(
+    resolvedSuccessMessage || `步骤 ${step}：已直接删除 ${removedCount} 个 ChatGPT / OpenAI cookies。`,
+    'ok'
+  );
+}
+
+async function runPreStep1CookieCleanup() {
+  await clearOpenAiCookiesForStep({
+    step: 1,
+    startMessage: '步骤 1：开始前先清理 ChatGPT / OpenAI cookies，确保以干净状态启动流程...',
+    successMessage: (removedCount) => `步骤 1：已直接删除 ${removedCount} 个 ChatGPT / OpenAI cookies，准备打开 ChatGPT 官网。`,
+  });
+}
+
+async function runPreStep6CookieCleanup() {
+  await clearOpenAiCookiesForStep({
+    step: 6,
+    preDelayMs: STEP6_PRE_LOGIN_COOKIE_CLEAR_DELAY_MS,
+    startMessage: `步骤 6：开始前等待 ${Math.round(STEP6_PRE_LOGIN_COOKIE_CLEAR_DELAY_MS / 1000)} 秒，然后直接删除 ChatGPT / OpenAI cookies...`,
+    successMessage: (removedCount) => `步骤 6：已直接删除 ${removedCount} 个 ChatGPT / OpenAI cookies，准备继续获取链接并登录。`,
+  });
 }
 
 // ============================================================
