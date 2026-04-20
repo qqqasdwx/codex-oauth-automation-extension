@@ -57,6 +57,67 @@ jobs:
 
           echo "tag_name=${tag_name}" >> "${GITHUB_OUTPUT}"
           echo "release_name=${release_name}" >> "${GITHUB_OUTPUT}"
+          echo "asset_name=codex-oauth-automation-extension-${tag_name}.zip" >> "${GITHUB_OUTPUT}"
+
+      - name: Build extension package zip
+        id: package
+        shell: bash
+        env:
+          TAG_NAME: ${{ steps.meta.outputs.tag_name }}
+          ASSET_NAME: ${{ steps.meta.outputs.asset_name }}
+        run: |
+          mkdir -p dist
+
+          export PACKAGE_ROOT="codex-oauth-automation-extension-${TAG_NAME}"
+          export PACKAGE_PATH="dist/${ASSET_NAME}"
+
+          python3 - <<'PY'
+          import os
+          import zipfile
+
+          package_root = os.environ['PACKAGE_ROOT']
+          package_path = os.environ['PACKAGE_PATH']
+
+          include_paths = [
+              'LICENSE',
+              'README.md',
+              'background',
+              'background.js',
+              'cloudflare-temp-email-utils.js',
+              'content',
+              'data',
+              'hero-sms-utils.js',
+              'hotmail-utils.js',
+              'icloud-utils.js',
+              'icons',
+              'luckmail-utils.js',
+              'managed-alias-utils.js',
+              'manifest.json',
+              'microsoft-email.js',
+              'outlook-email-utils.js',
+              'rules.json',
+              'scripts',
+              'sidepanel',
+              'start-hotmail-helper.bat',
+              'start-hotmail-helper.command',
+          ]
+
+          with zipfile.ZipFile(package_path, 'w', compression=zipfile.ZIP_DEFLATED) as archive:
+              for path in include_paths:
+                  if os.path.isdir(path):
+                      for root, dirs, files in os.walk(path):
+                          dirs[:] = [item for item in dirs if item != '__pycache__']
+                          for file_name in files:
+                              full_path = os.path.join(root, file_name)
+                              arcname = os.path.join(package_root, full_path)
+                              archive.write(full_path, arcname)
+                  elif os.path.isfile(path):
+                      archive.write(path, os.path.join(package_root, path))
+                  else:
+                      raise FileNotFoundError(f'发布打包缺少路径：{path}')
+          PY
+
+          echo "package_path=${PACKAGE_PATH}" >> "${GITHUB_OUTPUT}"
 
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
@@ -64,3 +125,5 @@ jobs:
           tag_name: ${{ steps.meta.outputs.tag_name }}
           name: ${{ steps.meta.outputs.release_name }}
           generate_release_notes: false
+          overwrite_files: true
+          files: ${{ steps.package.outputs.package_path }}
