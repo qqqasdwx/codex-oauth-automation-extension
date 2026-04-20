@@ -1,5 +1,7 @@
 # Multi-Page Automation
 
+> 📌 本仓库是基于上游仓库的增强版 fork，面向用户的功能差异说明见：[本仓库与上游仓库差别.md](./本仓库与上游仓库差别.md)
+
 一个用于批量跑通 ChatGPT OAuth 注册/登录流程的 Chrome 扩展。
 
 当前版本基于侧边栏控制，支持单步执行、整套自动执行、停止当前流程、保存常用配置，以及通过 DuckDuckGo / QQ / 163 / Inbucket / Hotmail / OutlookEmail 协助获取验证码。
