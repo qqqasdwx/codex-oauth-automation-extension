@@ -60,7 +60,7 @@
         source: 'background',
         payload: {
           vpsPassword: state.vpsPassword,
-          logStep: 6,
+          logStep: 7,
         },
       }, {
         timeoutMs: 30000,
@@ -121,7 +121,7 @@
           sub2apiPassword: state.sub2apiPassword,
           sub2apiGroupName: groupName,
           sub2apiDefaultProxyName: state.sub2apiDefaultProxyName,
-          logStep: 6,
+          logStep: 7,
         },
       }, {
         responseTimeoutMs: SUB2API_STEP1_RESPONSE_TIMEOUT_MS,

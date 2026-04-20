@@ -45,6 +45,7 @@
             ? await getOAuthFlowStepTimeoutMs(180000, {
               step: 7,
               actionLabel: 'OAuth 登录并进入验证码页',
+              oauthUrl,
             })
             : 180000;
 

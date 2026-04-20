@@ -39,9 +39,9 @@
       return '';
     }
 
-    function extractFailedStep(status = '', detail = '') {
+    function extractRecordStep(status = '', detail = '') {
       const normalizedStatus = String(status || '').trim().toLowerCase();
-      const statusMatch = normalizedStatus.match(/^step(\d+)_failed$/);
+      const statusMatch = normalizedStatus.match(/^step(\d+)_(?:failed|stopped)$/);
       if (statusMatch) {
         const step = Number(statusMatch[1]);
         return Number.isInteger(step) && step > 0 ? step : null;
@@ -73,6 +73,9 @@
         return '流程完成';
       }
       if (finalStatus === 'stopped') {
+        if (Number.isInteger(failedStep) && failedStep > 0) {
+          return `步骤 ${failedStep} 停止`;
+        }
         return '流程已停止';
       }
       if (finalStatus !== 'failed') {
@@ -152,7 +155,7 @@
       const failedStepCandidate = Number(record.failedStep);
       const failedStep = Number.isInteger(failedStepCandidate) && failedStepCandidate > 0
         ? failedStepCandidate
-        : extractFailedStep(record.finalStatus || record.status || '', failureDetail);
+        : extractRecordStep(record.finalStatus || record.status || '', failureDetail);
       const autoRunContext = normalizeAutoRunContext(record.autoRunContext);
       const retryCount = normalizeRetryCount(
         record.retryCount !== undefined
@@ -160,6 +163,8 @@
           : ((autoRunContext?.attemptRun || 0) > 1 ? autoRunContext.attemptRun - 1 : 0)
       );
       const source = normalizeSource(record.source || (autoRunContext ? 'auto' : 'manual'));
+      const computedFailureLabel = buildFailureLabel(finalStatus, failedStep, failureDetail);
+      const rawFailureLabel = String(record.failureLabel || '').trim();
 
       return {
         recordId: String(record.recordId || '').trim() || buildRecordId(email),
@@ -168,7 +173,9 @@
         finalStatus,
         finishedAt,
         retryCount,
-        failureLabel: String(record.failureLabel || '').trim() || buildFailureLabel(finalStatus, failedStep, failureDetail),
+        failureLabel: finalStatus === 'stopped'
+          ? computedFailureLabel
+          : (rawFailureLabel || computedFailureLabel),
         failureDetail,
         failedStep: Number.isInteger(failedStep) && failedStep > 0 ? failedStep : null,
         source,
@@ -215,7 +222,9 @@
       }
 
       const failureDetail = finalStatus === 'failed' || finalStatus === 'stopped' ? String(reason || '').trim() : '';
-      const failedStep = finalStatus === 'failed' ? extractFailedStep(status, failureDetail) : null;
+      const failedStep = finalStatus === 'failed' || finalStatus === 'stopped'
+        ? extractRecordStep(status, failureDetail)
+        : null;
       const source = Boolean(state.autoRunning) ? 'auto' : 'manual';
       const autoRunContext = source === 'auto' ? buildAutoRunContextFromState(state) : null;
       const retryCount = source === 'auto' ? getRetryCountFromState(state) : 0;
@@ -322,6 +331,9 @@
     }
 
     function shouldSyncAccountRunHistorySnapshot(state = {}) {
+      if (Boolean(state.contributionMode)) {
+        return false;
+      }
       if (!Boolean(state.accountRunHistoryTextEnabled)) {
         return false;
       }

@@ -33,6 +33,14 @@ const updateCardSummary = document.getElementById('update-card-summary');
 const updateReleaseList = document.getElementById('update-release-list');
 const btnOpenRelease = document.getElementById('btn-open-release');
 const settingsCard = document.getElementById('settings-card');
+const contributionModePanel = document.getElementById('contribution-mode-panel');
+const contributionModeText = document.getElementById('contribution-mode-text');
+const contributionOauthStatus = document.getElementById('contribution-oauth-status');
+const contributionCallbackStatus = document.getElementById('contribution-callback-status');
+const contributionModeSummary = document.getElementById('contribution-mode-summary');
+const btnStartContribution = document.getElementById('btn-start-contribution');
+const btnOpenContributionUpload = document.getElementById('btn-open-contribution-upload');
+const btnExitContributionMode = document.getElementById('btn-exit-contribution-mode');
 const displayOauthUrl = document.getElementById('display-oauth-url');
 const displayLocalhostUrl = document.getElementById('display-localhost-url');
 const displayStatus = document.getElementById('display-status');
@@ -88,6 +96,7 @@ const rowSub2ApiGroup = document.getElementById('row-sub2api-group');
 const inputSub2ApiGroup = document.getElementById('input-sub2api-group');
 const rowSub2ApiDefaultProxy = document.getElementById('row-sub2api-default-proxy');
 const inputSub2ApiDefaultProxy = document.getElementById('input-sub2api-default-proxy');
+const rowCustomPassword = document.getElementById('row-custom-password');
 const selectMailProvider = document.getElementById('select-mail-provider');
 const btnMailLogin = document.getElementById('btn-mail-login');
 const rowMail2925Mode = document.getElementById('row-mail-2925-mode');
@@ -190,6 +199,7 @@ const inputAutoDelayEnabled = document.getElementById('input-auto-delay-enabled'
 const inputAutoDelayMinutes = document.getElementById('input-auto-delay-minutes');
 const inputAutoStepDelaySeconds = document.getElementById('input-auto-step-delay-seconds');
 const inputVerificationResendCount = document.getElementById('input-verification-resend-count');
+const rowAccountRunHistoryTextEnabled = document.getElementById('row-account-run-history-text-enabled');
 const inputAccountRunHistoryTextEnabled = document.getElementById('input-account-run-history-text-enabled');
 const rowAccountRunHistoryHelperBaseUrl = document.getElementById('row-account-run-history-helper-base-url');
 const inputAccountRunHistoryHelperBaseUrl = document.getElementById('input-account-run-history-helper-base-url');
@@ -240,7 +250,6 @@ const DEFAULT_LUCKMAIL_BASE_URL = 'https://mails.luckyous.com';
 const DEFAULT_LUCKMAIL_EMAIL_TYPE = 'ms_graph';
 const DISPLAY_TIMEZONE = 'Asia/Shanghai';
 const DEFAULT_ACCOUNT_RUN_HISTORY_HELPER_BASE_URL = 'http://127.0.0.1:17373';
-const CONTRIBUTION_UPLOAD_URL = 'https://apikey.qzz.io/';
 
 function getManagedAliasUtils() {
   return window.MultiPageManagedAliasUtils || null;
@@ -798,18 +807,23 @@ async function openAutoRunFallbackRiskConfirmModal(totalRuns, fallbackThreadInte
 
 function updateConfigMenuControls() {
   const disabled = configActionInFlight || settingsSaveInFlight;
+  const contributionModeEnabled = Boolean(latestState?.contributionMode);
+  if (contributionModeEnabled && configMenuOpen) {
+    configMenuOpen = false;
+  }
   const importLocked = disabled
+    || contributionModeEnabled
     || currentAutoRun.autoRunning
     || Object.values(getStepStatuses()).some((status) => status === 'running');
   if (btnConfigMenu) {
-    btnConfigMenu.disabled = disabled;
+    btnConfigMenu.disabled = disabled || contributionModeEnabled;
     btnConfigMenu.setAttribute('aria-expanded', String(configMenuOpen));
   }
   if (configMenu) {
-    configMenu.hidden = !configMenuOpen;
+    configMenu.hidden = contributionModeEnabled || !configMenuOpen;
   }
   if (btnExportSettings) {
-    btnExportSettings.disabled = disabled;
+    btnExportSettings.disabled = disabled || contributionModeEnabled;
   }
   if (btnImportSettings) {
     btnImportSettings.disabled = importLocked;
@@ -890,6 +904,12 @@ function getRunningSteps(state = latestState) {
 function hasSavedProgress(state = latestState) {
   const statuses = getStepStatuses(state);
   return Object.values(statuses).some((status) => status !== 'pending');
+}
+
+function isContributionModeSwitchBlocked(state = latestState) {
+  const statuses = getStepStatuses(state);
+  const anyRunning = Object.values(statuses).some((status) => status === 'running');
+  return anyRunning || isAutoRunLockedPhase() || isAutoRunPausedPhase() || isAutoRunScheduledPhase();
 }
 
 function shouldOfferAutoModeChoice(state = latestState) {
@@ -1341,6 +1361,7 @@ function collectSettingsPayload() {
   const selectedCloudflareTempEmailDomain = normalizeCloudflareTempEmailDomainValue(
     !cloudflareTempEmailDomainEditMode ? selectTempEmailDomain.value : tempEmailActiveDomain
   ) || tempEmailActiveDomain;
+  const contributionModeEnabled = Boolean(latestState?.contributionMode);
   return {
     panelMode: selectPanelMode.value,
     vpsUrl: inputVpsUrl.value.trim(),
@@ -1353,14 +1374,18 @@ function collectSettingsPayload() {
     sub2apiPassword: inputSub2ApiPassword.value,
     sub2apiGroupName: inputSub2ApiGroup.value.trim(),
     sub2apiDefaultProxyName: inputSub2ApiDefaultProxy.value.trim(),
-    customPassword: inputPassword.value,
+    ...(contributionModeEnabled ? {} : {
+      customPassword: inputPassword.value,
+    }),
     mailProvider: selectMailProvider.value,
     mail2925Mode: getSelectedMail2925Mode(),
     emailGenerator: selectEmailGenerator.value,
     autoDeleteUsedIcloudAlias: checkboxAutoDeleteIcloud?.checked,
     icloudHostPreference: selectIcloudHostPreference?.value || 'auto',
-    accountRunHistoryTextEnabled: Boolean(inputAccountRunHistoryTextEnabled?.checked),
-    accountRunHistoryHelperBaseUrl: normalizeAccountRunHistoryHelperBaseUrlValue(inputAccountRunHistoryHelperBaseUrl?.value),
+    ...(contributionModeEnabled ? {} : {
+      accountRunHistoryTextEnabled: Boolean(inputAccountRunHistoryTextEnabled?.checked),
+      accountRunHistoryHelperBaseUrl: normalizeAccountRunHistoryHelperBaseUrlValue(inputAccountRunHistoryHelperBaseUrl?.value),
+    }),
     ...buildManagedAliasBaseEmailPayload(),
     inbucketHost: inputInbucketHost.value.trim(),
     inbucketMailbox: inputInbucketMailbox.value.trim(),
@@ -1485,7 +1510,9 @@ function updateAccountRunHistorySettingsUI() {
     return;
   }
 
-  rowAccountRunHistoryHelperBaseUrl.style.display = inputAccountRunHistoryTextEnabled.checked ? '' : 'none';
+  rowAccountRunHistoryHelperBaseUrl.style.display = inputAccountRunHistoryTextEnabled.checked && !latestState?.contributionMode
+    ? ''
+    : 'none';
 }
 
 function setSettingsCardLocked(locked) {
@@ -1662,6 +1689,7 @@ function applyAutoRunStatus(payload = currentAutoRun) {
   syncScheduledCountdownTicker();
   updateStopButtonState(scheduled || paused || locked || Object.values(getStepStatuses()).some(status => status === 'running'));
   updateConfigMenuControls();
+  renderContributionMode();
 }
 
 function initializeManualStepActions() {
@@ -1845,6 +1873,7 @@ async function restoreState() {
 
     updateStatusDisplay(latestState);
     updateProgressCounter();
+    renderContributionMode();
   } catch (err) {
     console.error('Failed to restore state:', err);
   }
@@ -1900,15 +1929,6 @@ function openRepositoryHomePage() {
 
 function openReleaseListPage() {
   openExternalUrl(getReleaseListUrl());
-}
-
-async function openContributionUploadPage() {
-  if (isContributionButtonLocked()) {
-    throw new Error('当前流程运行中，请先停止后再打开贡献页面。');
-  }
-
-  openExternalUrl(CONTRIBUTION_UPLOAD_URL);
-  return true;
 }
 
 function createUpdateNoteList(notes = []) {
@@ -2104,7 +2124,7 @@ async function initializeReleaseInfo() {
 }
 
 function syncPasswordField(state) {
-  inputPassword.value = state.customPassword || state.password || '';
+  inputPassword.value = state?.contributionMode ? '' : (state.customPassword || state.password || '');
 }
 
 function isCustomMailProvider(provider = selectMailProvider.value) {
@@ -2708,6 +2728,7 @@ function updateButtonStates() {
   if (checkboxAutoDeleteIcloud) checkboxAutoDeleteIcloud.disabled = disableIcloudControls;
   if (btnContributionMode) btnContributionMode.disabled = isContributionButtonLocked();
   updateStopButtonState(anyRunning || autoScheduled || isAutoRunPausedPhase() || autoLocked);
+  renderContributionMode();
 }
 
 function updateStopButtonState(active) {
@@ -3143,7 +3164,66 @@ const renderAccountRecords = accountRecordsManager?.render
   || (() => { });
 const bindAccountRecordEvents = accountRecordsManager?.bindEvents
   || (() => { });
+const closeAccountRecordsPanel = accountRecordsManager?.closePanel
+  || (() => { });
 bindAccountRecordEvents();
+const contributionModeManager = window.SidepanelContributionMode?.createContributionModeManager({
+  state: {
+    getLatestState: () => latestState,
+  },
+  dom: {
+    btnConfigMenu,
+    btnContributionMode,
+    contributionCallbackStatus,
+    btnExitContributionMode,
+    btnOpenAccountRecords,
+    btnOpenContributionUpload,
+    btnStartContribution,
+    contributionModePanel,
+    contributionModeSummary,
+    contributionModeText,
+    contributionOauthStatus,
+    rowAccountRunHistoryHelperBaseUrl,
+    rowAccountRunHistoryTextEnabled,
+    rowCustomPassword,
+    rowLocalCpaStep9Mode,
+    rowSub2ApiDefaultProxy,
+    rowSub2ApiEmail,
+    rowSub2ApiGroup,
+    rowSub2ApiPassword,
+    rowSub2ApiUrl,
+    rowVpsPassword,
+    rowVpsUrl,
+    selectPanelMode,
+  },
+  helpers: {
+    applySettingsState,
+    closeAccountRecordsPanel,
+    closeConfigMenu,
+    getContributionNickname: () => latestState?.email || '',
+    isModeSwitchBlocked: isContributionModeSwitchBlocked,
+    openConfirmModal,
+    openExternalUrl,
+    showToast,
+    startContributionAutoRun: () => startAutoRunFromCurrentSettings(),
+    updateAccountRunHistorySettingsUI,
+    updateConfigMenuControls,
+    updatePanelModeUI,
+    updateStatusDisplay,
+  },
+  runtime: {
+    sendMessage: (message) => chrome.runtime.sendMessage(message),
+  },
+  constants: {
+    contributionOauthUrl: 'https://apikey.qzz.io/oauth/',
+    contributionUploadUrl: 'https://apikey.qzz.io/',
+  },
+});
+const renderContributionMode = contributionModeManager?.render
+  || (() => { });
+const bindContributionModeEvents = contributionModeManager?.bindEvents
+  || (() => { });
+bindContributionModeEvents();
 renderStepsList();
 
 async function exportSettingsFile() {
@@ -3453,14 +3533,6 @@ btnConfigMenu?.addEventListener('click', (event) => {
   toggleConfigMenu();
 });
 
-btnContributionMode?.addEventListener('click', async () => {
-  try {
-    await openContributionUploadPage();
-  } catch (err) {
-    showToast(err.message, 'error');
-  }
-});
-
 btnRepoHome?.addEventListener('click', () => {
   openRepositoryHomePage();
 });
@@ -3503,9 +3575,65 @@ autoStartModal?.addEventListener('click', (event) => {
 });
 btnAutoStartClose?.addEventListener('click', () => resolveModalChoice(null));
 
+async function startAutoRunFromCurrentSettings() {
+  const totalRuns = getRunCountValue();
+  let mode = 'restart';
+  const autoRunSkipFailures = inputAutoSkipFailures.checked;
+  const fallbackThreadIntervalMinutes = normalizeAutoRunThreadIntervalMinutes(
+    inputAutoSkipFailuresThreadIntervalMinutes.value
+  );
+  inputAutoSkipFailuresThreadIntervalMinutes.value = String(fallbackThreadIntervalMinutes);
+
+  if (shouldOfferAutoModeChoice()) {
+    const startStep = getFirstUnfinishedStep();
+    const runningStep = getRunningSteps()[0] ?? null;
+    const choice = await openAutoStartChoiceDialog(startStep, { runningStep });
+    if (!choice) {
+      return false;
+    }
+    mode = choice;
+  }
+
+  if (shouldWarnAutoRunFallbackRisk(totalRuns, autoRunSkipFailures)
+    && !isAutoRunFallbackRiskPromptDismissed()) {
+    const result = await openAutoRunFallbackRiskConfirmModal(totalRuns, fallbackThreadIntervalMinutes);
+    if (!result.confirmed) {
+      return false;
+    }
+    if (result.dismissPrompt) {
+      setAutoRunFallbackRiskPromptDismissed(true);
+    }
+  }
+
+  btnAutoRun.disabled = true;
+  inputRunCount.disabled = true;
+  const delayEnabled = inputAutoDelayEnabled.checked;
+  const delayMinutes = normalizeAutoDelayMinutes(inputAutoDelayMinutes.value);
+  inputAutoDelayMinutes.value = String(delayMinutes);
+  btnAutoRun.innerHTML = delayEnabled
+    ? '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg> 璁″垝涓?..'
+    : '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg> 杩愯涓?..';
+  const response = await chrome.runtime.sendMessage({
+    type: delayEnabled ? 'SCHEDULE_AUTO_RUN' : 'AUTO_RUN',
+    source: 'sidepanel',
+    payload: {
+      totalRuns,
+      delayMinutes,
+      autoRunSkipFailures,
+      contributionMode: Boolean(latestState?.contributionMode),
+      mode,
+    },
+  });
+  if (response?.error) {
+    throw new Error(response.error);
+  }
+  return true;
+}
+
 // Auto Run
 btnAutoRun.addEventListener('click', async () => {
   try {
+    return await startAutoRunFromCurrentSettings();
     const totalRuns = getRunCountValue();
     let mode = 'restart';
     const autoRunSkipFailures = inputAutoSkipFailures.checked;
@@ -4210,11 +4338,19 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       if (message.payload.email !== undefined) {
         inputEmail.value = message.payload.email || '';
       }
-      if (message.payload.password !== undefined) {
-        inputPassword.value = message.payload.password || '';
+      if (
+        message.payload.password !== undefined
+        || message.payload.customPassword !== undefined
+        || message.payload.contributionMode !== undefined
+      ) {
+        syncPasswordField(latestState || {});
       }
       if (message.payload.localCpaStep9Mode !== undefined) {
         setLocalCpaStep9Mode(message.payload.localCpaStep9Mode);
+      }
+      if (message.payload.panelMode !== undefined) {
+        selectPanelMode.value = message.payload.panelMode || 'cpa';
+        updatePanelModeUI();
       }
       if (message.payload.oauthUrl !== undefined) {
         displayOauthUrl.textContent = message.payload.oauthUrl || '等待中...';
@@ -4334,6 +4470,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           )
         );
       }
+      renderContributionMode();
       break;
     }
 

@@ -117,10 +117,10 @@ return {
 
 test('step 8 reruns step 7 when auth page enters login timeout retry state', async () => {
   const calls = {
-    executeStep7: 0,
+    rerunStep7: 0,
     ensureReady: 0,
     logs: [],
-    sleeps: [],
+    rerunOptions: [],
     resolveCalls: 0,
   };
 
@@ -142,8 +142,9 @@ test('step 8 reruns step 7 when auth page enters login timeout retry state', asy
       }
       return { state: 'verification_page' };
     },
-    executeStep7: async () => {
-      calls.executeStep7 += 1;
+    rerunStep7ForStep8Recovery: async (options) => {
+      calls.rerunStep7 += 1;
+      calls.rerunOptions.push(options || null);
     },
     getOAuthFlowRemainingMs: async () => 8000,
     getOAuthFlowStepTimeoutMs: async (defaultTimeoutMs) => Math.min(defaultTimeoutMs, 8000),
@@ -167,9 +168,6 @@ test('step 8 reruns step 7 when auth page enters login timeout retry state', asy
     setState: async () => {},
     setStepStatus: async () => {},
     shouldUseCustomRegistrationEmail: () => false,
-    sleepWithStop: async (ms) => {
-      calls.sleeps.push(ms);
-    },
     STANDARD_MAIL_VERIFICATION_RESEND_INTERVAL_MS: 25000,
     STEP7_MAIL_POLLING_RECOVERY_MAX_ATTEMPTS: 3,
     throwIfStopped: () => {},
@@ -181,9 +179,13 @@ test('step 8 reruns step 7 when auth page enters login timeout retry state', asy
     oauthUrl: 'https://oauth.example/latest',
   });
 
-  assert.equal(calls.executeStep7, 1);
+  assert.equal(calls.rerunStep7, 1);
   assert.equal(calls.ensureReady, 2);
   assert.equal(calls.resolveCalls, 1);
   assert.equal(calls.logs.some(({ message }) => /重新开始|重新发起/.test(message)), true);
-  assert.deepStrictEqual(calls.sleeps, [3000]);
+  assert.deepStrictEqual(calls.rerunOptions, [
+    {
+      logMessage: '步骤 8：认证页进入重试/超时报错状态，正在回到步骤 7 重新发起登录流程...',
+    },
+  ]);
 });

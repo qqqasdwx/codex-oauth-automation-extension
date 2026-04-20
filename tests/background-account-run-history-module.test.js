@@ -100,18 +100,42 @@ test('account run history helper upgrades old records, keeps stopped items and s
   assert.equal(fetchCalled, false);
   assert.equal(helpers.shouldAppendAccountRunTextFile({ accountRunHistoryTextEnabled: false, accountRunHistoryHelperBaseUrl: 'http://127.0.0.1:17373' }), false);
   assert.equal(helpers.shouldAppendAccountRunTextFile({ accountRunHistoryTextEnabled: true, accountRunHistoryHelperBaseUrl: 'http://127.0.0.1:17373' }), true);
-  const stoppedRecord = helpers.buildAccountRunHistoryRecord({ email: 'a@b.com', password: 'x' }, 'stopped', 'stop');
+  const stoppedRecord = helpers.buildAccountRunHistoryRecord(
+    { email: 'a@b.com', password: 'x' },
+    'step7_stopped',
+    '步骤 7 已被用户停止'
+  );
   assert.equal(stoppedRecord.recordId, 'a@b.com');
   assert.equal(stoppedRecord.email, 'a@b.com');
   assert.equal(stoppedRecord.password, 'x');
   assert.equal(stoppedRecord.finalStatus, 'stopped');
   assert.equal(stoppedRecord.retryCount, 0);
-  assert.equal(stoppedRecord.failureLabel, '流程已停止');
-  assert.equal(stoppedRecord.failureDetail, 'stop');
-  assert.equal(stoppedRecord.failedStep, null);
+  assert.equal(stoppedRecord.failureLabel, '步骤 7 停止');
+  assert.equal(stoppedRecord.failureDetail, '步骤 7 已被用户停止');
+  assert.equal(stoppedRecord.failedStep, 7);
   assert.equal(stoppedRecord.source, 'manual');
   assert.equal(stoppedRecord.autoRunContext, null);
   assert.ok(stoppedRecord.finishedAt);
+
+  const genericStoppedRecord = helpers.buildAccountRunHistoryRecord({ email: 'stop@b.com', password: 'y' }, 'stopped', 'stop');
+  assert.equal(genericStoppedRecord.failureLabel, '流程已停止');
+  assert.equal(genericStoppedRecord.failedStep, null);
+
+  const normalizedStoppedRecord = helpers.normalizeAccountRunHistoryRecord({
+    recordId: 'legacy-stop@example.com',
+    email: 'legacy-stop@example.com',
+    password: 'secret',
+    finalStatus: 'stopped',
+    finishedAt: '2026-04-17T00:12:00.000Z',
+    retryCount: 0,
+    failureLabel: '流程已停止',
+    failureDetail: '步骤 7 已被用户停止。',
+    failedStep: 7,
+    source: 'manual',
+    autoRunContext: null,
+  });
+  assert.equal(normalizedStoppedRecord.failureLabel, '步骤 7 停止');
+  assert.equal(normalizedStoppedRecord.failedStep, 7);
 });
 
 test('account run history helper clears persisted records and syncs full snapshot payload to local helper', async () => {

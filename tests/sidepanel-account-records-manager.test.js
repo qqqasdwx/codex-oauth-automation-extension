@@ -207,7 +207,7 @@ test('account records manager supports filter chips and partial multi-select del
         finalStatus: 'stopped',
         finishedAt: '2026-04-17T04:28:00.000Z',
         retryCount: 1,
-        failureLabel: '流程已停止',
+        failureLabel: '步骤 7 停止',
       },
     ],
   };
@@ -303,6 +303,7 @@ test('account records manager supports filter chips and partial multi-select del
   assert.doesNotMatch(list.innerHTML, /success@example\.com/);
   assert.match(list.innerHTML, /failed@example\.com/);
   assert.match(list.innerHTML, /stopped@example\.com/);
+  assert.match(list.innerHTML, /步骤 7 停止/);
 
   btnToggleAccountRecordsSelection.listeners.click();
 

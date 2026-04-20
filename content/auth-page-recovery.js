@@ -15,6 +15,7 @@
       isActionEnabled,
       isVisibleElement,
       log,
+      routeErrorPattern = null,
       simulateClick,
       sleep,
       throwIfStopped,
@@ -65,9 +66,12 @@
       const detailMatched = detailPattern instanceof RegExp
         ? detailPattern.test(text)
         : false;
+      const routeErrorMatched = routeErrorPattern instanceof RegExp
+        ? routeErrorPattern.test(text)
+        : false;
       const maxCheckAttemptsBlocked = /max_check_attempts/i.test(text);
 
-      if (!titleMatched && !detailMatched && !maxCheckAttemptsBlocked) {
+      if (!titleMatched && !detailMatched && !routeErrorMatched && !maxCheckAttemptsBlocked) {
         return null;
       }
 
@@ -78,6 +82,7 @@
         retryEnabled: isActionEnabled(retryButton),
         titleMatched,
         detailMatched,
+        routeErrorMatched,
         maxCheckAttemptsBlocked,
       };
     }

@@ -172,6 +172,7 @@ test('step 7 starts a new oauth timeout window for each refreshed oauth url', as
       options: {
         step: 7,
         actionLabel: 'OAuth 登录并进入验证码页',
+        oauthUrl: 'https://oauth.example/latest',
       },
     },
   ]);

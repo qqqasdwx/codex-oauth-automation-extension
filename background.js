@@ -4,6 +4,7 @@ importScripts(
   'managed-alias-utils.js',
   'hero-sms-utils.js',
   'background/account-run-history.js',
+  'background/contribution-oauth.js',
   'background/panel-bridge.js',
   'background/generated-email-helpers.js',
   'background/outlook-email-provider.js',
@@ -193,6 +194,23 @@ const DISPLAY_TIMEZONE = 'Asia/Shanghai';
 const MICROSOFT_TOKEN_DNR_RULE_ID = 1001;
 const PERSISTENT_ALIAS_STATE_KEYS = ['manualAliasUsage', 'preservedAliases'];
 const ACCOUNT_RUN_HISTORY_STORAGE_KEY = 'accountRunHistory';
+const CONTRIBUTION_RUNTIME_DEFAULTS = self.MultiPageBackgroundContributionOAuth?.RUNTIME_DEFAULTS || {
+  contributionMode: false,
+  contributionModeExpected: false,
+  contributionSessionId: '',
+  contributionAuthUrl: '',
+  contributionAuthState: '',
+  contributionCallbackUrl: '',
+  contributionStatus: '',
+  contributionStatusMessage: '',
+  contributionLastPollAt: 0,
+  contributionCallbackStatus: 'idle',
+  contributionCallbackMessage: '',
+  contributionAuthOpenedAt: 0,
+  contributionAuthTabId: 0,
+};
+const CONTRIBUTION_RUNTIME_KEYS = self.MultiPageBackgroundContributionOAuth?.RUNTIME_KEYS
+  || Object.keys(CONTRIBUTION_RUNTIME_DEFAULTS);
 
 initializeSessionStorageAccess();
 setupDeclarativeNetRequestRules();
@@ -302,6 +320,7 @@ const PRE_LOGIN_COOKIE_CLEAR_ORIGINS = [
 const DEFAULT_STATE = {
   currentStep: 0, // 当前流程执行到的步骤编号。
   stepStatuses: Object.fromEntries(STEP_IDS.map((stepId) => [stepId, 'pending'])),
+  ...CONTRIBUTION_RUNTIME_DEFAULTS,
   oauthUrl: null, // 运行时抓取到的 OAuth 地址，不要手动预填。
   email: null, // 运行时邮箱，由程序自动获取并写入，不能手动预填。
   password: null, // 运行时实际密码，由 customPassword 或程序自动生成后写入。
@@ -350,6 +369,7 @@ const DEFAULT_STATE = {
   loginVerificationRequestedAt: null,
   skipSignupProfileStep: false,
   oauthFlowDeadlineAt: null,
+  oauthFlowDeadlineSourceUrl: null,
   currentHotmailAccountId: null,
   currentOutlookEmailAccountId: null,
   preferredIcloudHost: '',
@@ -1170,6 +1190,67 @@ async function setPasswordState(password) {
   broadcastDataUpdate({ password });
 }
 
+function buildContributionModeState(enabled, persistedSettings = {}, currentState = {}) {
+  const currentContributionState = {};
+  for (const key of CONTRIBUTION_RUNTIME_KEYS) {
+    currentContributionState[key] = currentState[key] !== undefined
+      ? currentState[key]
+      : CONTRIBUTION_RUNTIME_DEFAULTS[key];
+  }
+
+  if (enabled) {
+    return {
+      ...currentContributionState,
+      contributionMode: true,
+      contributionModeExpected: true,
+      panelMode: 'cpa',
+      customPassword: '',
+      accountRunHistoryTextEnabled: false,
+    };
+  }
+
+  return {
+    ...CONTRIBUTION_RUNTIME_DEFAULTS,
+    contributionMode: false,
+    contributionModeExpected: false,
+    panelMode: persistedSettings.panelMode || DEFAULT_STATE.panelMode,
+    customPassword: persistedSettings.customPassword || '',
+    accountRunHistoryTextEnabled: Boolean(persistedSettings.accountRunHistoryTextEnabled),
+  };
+}
+
+async function setContributionMode(enabled) {
+  const normalizedEnabled = Boolean(enabled);
+  const [persistedSettings, currentState] = await Promise.all([
+    getPersistedSettings(),
+    getState(),
+  ]);
+
+  if (normalizedEnabled) {
+    await setPersistentSettings({ panelMode: 'cpa' });
+  }
+
+  const updates = buildContributionModeState(normalizedEnabled, {
+    ...persistedSettings,
+    ...(normalizedEnabled ? { panelMode: 'cpa' } : {}),
+  }, currentState);
+
+  await setState(updates);
+  const nextState = await getState();
+  const contributionBroadcast = {};
+  for (const key of CONTRIBUTION_RUNTIME_KEYS) {
+    contributionBroadcast[key] = nextState[key];
+  }
+  broadcastDataUpdate({
+    ...contributionBroadcast,
+    panelMode: nextState.panelMode,
+    customPassword: nextState.customPassword,
+    accountRunHistoryTextEnabled: nextState.accountRunHistoryTextEnabled,
+    accountRunHistoryHelperBaseUrl: nextState.accountRunHistoryHelperBaseUrl,
+  });
+  return nextState;
+}
+
 function getLuckmailUsedPurchases(state = {}) {
   return normalizeLuckmailUsedPurchases(state?.luckmailUsedPurchases);
 }
@@ -1327,15 +1408,21 @@ async function resetState() {
       'luckmailPreserveTagId',
       'luckmailPreserveTagName',
       'preferredIcloudHost',
+      ...CONTRIBUTION_RUNTIME_KEYS,
     ]),
     getPersistedSettings(),
     getPersistedAliasState(),
   ]);
+  const contributionModeState = buildContributionModeState(Boolean(prev.contributionMode), {
+    ...persistedSettings,
+    ...(prev.contributionMode ? { panelMode: 'cpa' } : {}),
+  }, prev);
   await chrome.storage.session.clear();
   await chrome.storage.session.set({
     ...DEFAULT_STATE,
     ...persistedSettings,
     ...persistedAliasState,
+    ...contributionModeState,
     seenCodes: prev.seenCodes || [],
     seenInbucketMailIds: prev.seenInbucketMailIds || [],
     accounts: prev.accounts || [],
@@ -4117,6 +4204,7 @@ function getDownstreamStateResets(step) {
       signupVerificationRequestedAt: null,
       loginVerificationRequestedAt: null,
       oauthFlowDeadlineAt: null,
+      oauthFlowDeadlineSourceUrl: null,
       lastSignupCode: null,
       lastLoginCode: null,
       localhostUrl: null,
@@ -4130,6 +4218,7 @@ function getDownstreamStateResets(step) {
       signupVerificationRequestedAt: null,
       loginVerificationRequestedAt: null,
       oauthFlowDeadlineAt: null,
+      oauthFlowDeadlineSourceUrl: null,
       lastSignupCode: null,
       lastLoginCode: null,
       localhostUrl: null,
@@ -4142,6 +4231,7 @@ function getDownstreamStateResets(step) {
       signupVerificationRequestedAt: null,
       loginVerificationRequestedAt: null,
       oauthFlowDeadlineAt: null,
+      oauthFlowDeadlineSourceUrl: null,
       lastSignupCode: null,
       lastLoginCode: null,
       localhostUrl: null,
@@ -4153,6 +4243,7 @@ function getDownstreamStateResets(step) {
       lastLoginCode: null,
       loginVerificationRequestedAt: null,
       oauthFlowDeadlineAt: null,
+      oauthFlowDeadlineSourceUrl: null,
       localhostUrl: null,
       skipSignupProfileStep: false,
     };
@@ -4208,6 +4299,79 @@ function getRunningSteps(statuses = {}) {
     .filter(([, status]) => status === 'running')
     .map(([step]) => Number(step))
     .sort((a, b) => a - b);
+}
+
+function inferStoppedRecordStep(state = {}) {
+  const statuses = { ...DEFAULT_STATE.stepStatuses, ...(state?.stepStatuses || {}) };
+  const stepIds = Object.keys(statuses)
+    .map((step) => Number(step))
+    .filter(Number.isFinite)
+    .sort((left, right) => left - right);
+
+  const runningSteps = stepIds.filter((step) => statuses[step] === 'running');
+  if (runningSteps.length) {
+    return runningSteps[0];
+  }
+
+  const hasProgress = stepIds.some((step) => statuses[step] !== 'pending');
+  if (!hasProgress) {
+    return null;
+  }
+
+  for (const step of stepIds) {
+    const status = statuses[step] || 'pending';
+    if (!(status === 'completed' || status === 'manual_completed' || status === 'skipped')) {
+      return step;
+    }
+  }
+
+  return null;
+}
+
+function resolveAccountRunRecordStatusForStop(status, state = {}) {
+  const normalizedStatus = String(status || '').trim().toLowerCase();
+  if (normalizedStatus === 'stopped') {
+    const inferredStep = inferStoppedRecordStep(state);
+    if (Number.isInteger(inferredStep) && inferredStep > 0) {
+      return `step${inferredStep}_stopped`;
+    }
+  }
+  return status;
+}
+
+function extractStoppedStepFromRecordStatus(status = '') {
+  const match = String(status || '').trim().toLowerCase().match(/^step(\d+)_stopped$/);
+  if (!match) {
+    return null;
+  }
+  const step = Number(match[1]);
+  return Number.isInteger(step) && step > 0 ? step : null;
+}
+
+function resolveAccountRunRecordReasonForStop(status, reason = '') {
+  const text = String(reason || '').trim();
+  const stoppedStep = extractStoppedStepFromRecordStatus(status);
+
+  if (!stoppedStep) {
+    if (!text || text === STOP_ERROR_MESSAGE || /^流程已被用户停止。?$/.test(text)) {
+      return '流程已停止。';
+    }
+    return text;
+  }
+
+  if (!text || text === STOP_ERROR_MESSAGE || /^流程已被用户停止。?$/.test(text)) {
+    return `步骤 ${stoppedStep} 已被用户停止。`;
+  }
+
+  if (/流程尚未完成/.test(text) || /已使用邮箱/.test(text)) {
+    return `步骤 ${stoppedStep} 已停止：邮箱已设置，流程尚未完成。`;
+  }
+
+  if (/步骤\s*\d+\s*已(?:被用户)?停止/.test(text)) {
+    return text.replace(/步骤\s*\d+/, `步骤 ${stoppedStep}`);
+  }
+
+  return text;
 }
 
 function getAutoRunStatusPayload(phase, payload = {}) {
@@ -4685,7 +4849,11 @@ async function skipStep(step) {
   return { ok: true, step, status: 'skipped' };
 }
 
-function throwIfStopped() {
+function throwIfStopped(error = null) {
+  const errorMessage = typeof error === 'string' ? error : error?.message;
+  if (errorMessage === STOP_ERROR_MESSAGE) {
+    throw error instanceof Error ? error : new Error(STOP_ERROR_MESSAGE);
+  }
   if (stopRequested) {
     throw new Error(STOP_ERROR_MESSAGE);
   }
@@ -4888,6 +5056,7 @@ async function handleStepData(step, payload) {
         await setState({
           localhostUrl: payload.localhostUrl,
           oauthFlowDeadlineAt: null,
+          oauthFlowDeadlineSourceUrl: null,
         });
         broadcastDataUpdate({ localhostUrl: payload.localhostUrl });
       }
@@ -5085,6 +5254,59 @@ async function waitForRunningStepsToFinish(payload = {}) {
   return currentState;
 }
 
+const AUTH_CHAIN_STEP_IDS = new Set([7, 8, 9, 10]);
+let activeTopLevelAuthChainExecution = null;
+
+function isAuthChainStep(step) {
+  return AUTH_CHAIN_STEP_IDS.has(Number(step));
+}
+
+async function acquireTopLevelAuthChainExecution(step) {
+  const normalizedStep = Number(step);
+  if (!isAuthChainStep(normalizedStep)) {
+    return {
+      joined: false,
+      release() {},
+    };
+  }
+
+  if (activeTopLevelAuthChainExecution) {
+    const activeExecution = activeTopLevelAuthChainExecution;
+    await addLog(
+      `步骤 ${normalizedStep}：检测到步骤 ${activeExecution.step} 正在运行，本次请求将复用当前授权链，不再重复启动。`,
+      'warn'
+    );
+    const result = await activeExecution.promise;
+    if (result?.error) {
+      throw result.error;
+    }
+    return {
+      joined: true,
+      release() {},
+    };
+  }
+
+  let settleExecution = () => {};
+  const promise = new Promise((resolve) => {
+    settleExecution = (error = null) => resolve({ error });
+  });
+  const execution = {
+    step: normalizedStep,
+    promise,
+  };
+  activeTopLevelAuthChainExecution = execution;
+
+  return {
+    joined: false,
+    release(error = null) {
+      if (activeTopLevelAuthChainExecution === execution) {
+        activeTopLevelAuthChainExecution = null;
+      }
+      settleExecution(error);
+    },
+  };
+}
+
 async function markRunningStepsStopped() {
   const state = await getState();
   const runningSteps = getRunningSteps(state.stepStatuses);
@@ -5097,6 +5319,8 @@ async function markRunningStepsStopped() {
 async function requestStop(options = {}) {
   const { logMessage = '已收到停止请求，正在取消当前操作...' } = options;
   const state = await getState();
+  const runningSteps = getRunningSteps(state.stepStatuses);
+  const inferredStopStep = inferStoppedRecordStep(state);
   const timerPlan = getPendingAutoRunTimerPlan(state);
   const cleanupPhoneVerificationState = async () => {
     if (phoneVerificationHelpers?.cleanupHeroSmsActivation) {
@@ -5155,6 +5379,10 @@ async function requestStop(options = {}) {
   await addLog(logMessage, 'warn');
   await broadcastStopToContentScripts();
 
+  if (!runningSteps.length && Number.isInteger(inferredStopStep) && inferredStopStep > 0) {
+    await appendAndBroadcastAccountRunRecord('stopped', state, STOP_ERROR_MESSAGE);
+  }
+
   for (const waiter of stepWaiters.values()) {
     waiter.reject(new Error(STOP_ERROR_MESSAGE));
   }
@@ -5186,21 +5414,29 @@ async function requestStop(options = {}) {
 async function executeStep(step, options = {}) {
   const { deferRetryableTransportError = false } = options;
   console.log(LOG_PREFIX, `Executing step ${step}`);
-  throwIfStopped();
-  await setStepStatus(step, 'running');
-  await addLog(`步骤 ${step} 开始执行`);
-  await humanStepDelay();
-
-  const state = await getState();
-
-  // Set flow start time on first step
-  if (step === 1 && !state.flowStartTime) {
-    await setState({ flowStartTime: Date.now() });
+  const authChainClaim = await acquireTopLevelAuthChainExecution(step);
+  if (authChainClaim.joined) {
+    return;
   }
 
+  let executionError = null;
+  throwIfStopped();
   try {
+    await setStepStatus(step, 'running');
+    await addLog(`步骤 ${step} 开始执行`);
+    await humanStepDelay();
+
+    const state = await getState();
+
+    // Set flow start time on first step
+    if (step === 1 && !state.flowStartTime) {
+      await setState({ flowStartTime: Date.now() });
+    }
+
     await stepRegistry.executeStep(step, state);
   } catch (err) {
+    executionError = err;
+    const state = await getState();
     if (isStopError(err)) {
       await setStepStatus(step, 'stopped');
       await addLog(`步骤 ${step} 已被用户停止`, 'warn');
@@ -5222,6 +5458,8 @@ async function executeStep(step, options = {}) {
       );
     }
     throw err;
+  } finally {
+    authChainClaim.release(executionError);
   }
 }
 
@@ -5368,6 +5606,15 @@ const accountRunHistoryHelpers = self.MultiPageBackgroundAccountRunHistory?.crea
   getState,
   normalizeAccountRunHistoryHelperBaseUrl,
 });
+const contributionOAuthManager = self.MultiPageBackgroundContributionOAuth?.createContributionOAuthManager({
+  addLog,
+  broadcastDataUpdate,
+  chrome,
+  closeLocalhostCallbackTabs,
+  getState,
+  setState,
+});
+contributionOAuthManager?.ensureCallbackListeners?.();
 
 async function broadcastAccountRunHistoryUpdate() {
   if (!accountRunHistoryHelpers?.getPersistedAccountRunHistory) {
@@ -5384,7 +5631,10 @@ async function appendAndBroadcastAccountRunRecord(status, stateOverride = null, 
     return null;
   }
 
-  const record = await accountRunHistoryHelpers.appendAccountRunRecord(status, stateOverride, reason);
+  const state = stateOverride || await getState();
+  const resolvedStatus = resolveAccountRunRecordStatusForStop(status, state);
+  const resolvedReason = resolveAccountRunRecordReasonForStop(resolvedStatus, reason);
+  const record = await accountRunHistoryHelpers.appendAccountRunRecord(resolvedStatus, state, resolvedReason);
   if (!record) {
     return null;
   }
@@ -6094,7 +6344,6 @@ const step8Executor = self.MultiPageBackgroundStep8?.createStep8Executor({
   CLOUDFLARE_TEMP_EMAIL_PROVIDER,
   confirmCustomVerificationStepBypass: verificationFlowHelpers.confirmCustomVerificationStepBypass,
   ensureStep8VerificationPageReady,
-  executeStep7: (...args) => executeStep7(...args),
   getOAuthFlowRemainingMs,
   getOAuthFlowStepTimeoutMs,
   getPanelMode,
@@ -6107,9 +6356,9 @@ const step8Executor = self.MultiPageBackgroundStep8?.createStep8Executor({
   LUCKMAIL_PROVIDER,
   OUTLOOK_EMAIL_PROVIDER: OUTLOOK_EMAIL_PROVIDER_KEY,
   resolveVerificationStep: verificationFlowHelpers.resolveVerificationStep,
+  rerunStep7ForStep8Recovery: (...args) => rerunStep7ForStep8Recovery(...args),
   reuseOrCreateTab,
   setState,
-  setStepStatus,
   shouldUseCustomRegistrationEmail,
   sleepWithStop,
   STANDARD_MAIL_VERIFICATION_RESEND_INTERVAL_MS,
@@ -6145,7 +6394,7 @@ const stepExecutorsByKey = {
   'oauth-login': (state) => step7Executor.executeStep7(state),
   'fetch-login-code': (state) => step8Executor.executeStep8(state),
   'confirm-oauth': (state) => step9Executor.executeStep9(state),
-  'platform-verify': (state) => step10Executor.executeStep10(state),
+  'platform-verify': (state) => executeStep10(state),
 };
 const messageRouter = self.MultiPageBackgroundMessageRouter?.createMessageRouter({
   addLog,
@@ -6222,6 +6471,7 @@ const messageRouter = self.MultiPageBackgroundMessageRouter?.createMessageRouter
   scheduleAutoRun,
   selectLuckmailPurchase,
   setCurrentHotmailAccount,
+  setContributionMode,
   setEmailState,
   setEmailStateSilently,
   setIcloudAliasPreservedState,
@@ -6234,7 +6484,9 @@ const messageRouter = self.MultiPageBackgroundMessageRouter?.createMessageRouter
   setStepStatus,
   skipAutoRunCountdown,
   skipStep,
+  startContributionFlow: (...args) => contributionOAuthManager?.startContributionFlow?.(...args),
   startAutoRunLoop,
+  pollContributionStatus: (...args) => contributionOAuthManager?.pollContributionStatus?.(...args),
   syncHotmailAccounts,
   testHotmailAccountMailAccess,
   upsertHotmailAccount,
@@ -6600,7 +6852,24 @@ async function runPreStep6CookieCleanup() {
 // ============================================================
 
 async function refreshOAuthUrlBeforeStep6(state) {
-  await addLog(`步骤 7：正在刷新登录用的 ${getPanelModeLabel(state)} OAuth 链接...`);
+  if (state?.contributionModeExpected && !state?.contributionMode) {
+    throw new Error('步骤 7：当前自动流程预期使用贡献模式，但运行态 contributionMode 已丢失，已阻止回退到普通 CPA / SUB2API 链路。请重新进入贡献模式后再点击自动。');
+  }
+  if (state?.contributionMode && contributionOAuthManager?.startContributionFlow) {
+    await addLog('步骤 7：contributionMode=true，走公开贡献接口，正在申请 OAuth 登录地址...', 'info');
+    const contributionState = await contributionOAuthManager.startContributionFlow({
+      nickname: state.email,
+      openAuthTab: false,
+      stateOverride: state,
+    });
+    const oauthUrl = String(contributionState?.contributionAuthUrl || '').trim();
+    if (!oauthUrl) {
+      throw new Error('贡献模式未返回可用的登录地址，请稍后重试。');
+    }
+    await handleStepData(1, { oauthUrl });
+    return oauthUrl;
+  }
+  await addLog(`步骤 7：contributionMode=false，走普通 CPA / SUB2API 链路（当前面板：${getPanelModeLabel(state)}），正在刷新 OAuth 登录地址...`, 'info');
   console.log(LOG_PREFIX, '[refreshOAuthUrlBeforeStep6] requesting fresh OAuth directly from panel');
   const refreshResult = await requestOAuthUrlFromPanel(state, { logLabel: '步骤 7' });
   await handleStepData(1, refreshResult);
@@ -6626,10 +6895,18 @@ function normalizeOAuthFlowDeadlineAt(value) {
   return Math.floor(numeric);
 }
 
+function normalizeOAuthFlowSourceUrl(value) {
+  const normalized = String(value || '').trim();
+  return normalized || null;
+}
+
 async function startOAuthFlowTimeoutWindow(options = {}) {
   const step = Number(options.step) || 7;
   const deadlineAt = Date.now() + OAUTH_FLOW_TIMEOUT_MS;
-  await setState({ oauthFlowDeadlineAt: deadlineAt });
+  await setState({
+    oauthFlowDeadlineAt: deadlineAt,
+    oauthFlowDeadlineSourceUrl: normalizeOAuthFlowSourceUrl(options.oauthUrl),
+  });
   await addLog(`步骤 ${step}：已拿到新的 OAuth 登录地址，开始 6 分钟倒计时。`, 'info');
   return deadlineAt;
 }
@@ -6639,7 +6916,19 @@ async function getOAuthFlowRemainingMs(options = {}) {
   const actionLabel = String(options.actionLabel || '后续授权流程').trim() || '后续授权流程';
   const state = options.state || await getState();
   const deadlineAt = normalizeOAuthFlowDeadlineAt(state?.oauthFlowDeadlineAt);
+  const deadlineSourceUrl = normalizeOAuthFlowSourceUrl(state?.oauthFlowDeadlineSourceUrl);
+  const currentOauthUrl = normalizeOAuthFlowSourceUrl(options.oauthUrl !== undefined ? options.oauthUrl : state?.oauthUrl);
   if (!deadlineAt) {
+    return null;
+  }
+
+  if (deadlineSourceUrl && currentOauthUrl && deadlineSourceUrl !== currentOauthUrl) {
+    console.warn(LOG_PREFIX, '[oauth-flow] ignoring stale deadline due to oauth url mismatch', {
+      step,
+      actionLabel,
+      deadlineSourceUrl,
+      currentOauthUrl,
+    });
     return null;
   }
 
@@ -6786,6 +7075,43 @@ async function ensureStep8VerificationPageReady(options = {}) {
   const stateLabel = getLoginAuthStateLabel(pageState.state);
   const urlPart = pageState.url ? ` URL: ${pageState.url}` : '';
   throw new Error(`当前未进入登录验证码页面，请先重新完成步骤 7。当前状态：${stateLabel}.${urlPart}`.trim());
+}
+
+async function rerunStep7ForStep8Recovery(options = {}) {
+  const {
+    logMessage = '步骤 8：正在回到步骤 7，重新发起登录验证码流程...',
+    postStepDelayMs = 3000,
+  } = options;
+
+  throwIfStopped();
+  const initialState = await getState();
+  await addLog(logMessage, 'warn');
+  await setStepStatus(7, 'running');
+  await addLog('步骤 7 开始执行');
+
+  try {
+    await step7Executor.executeStep7(initialState);
+  } catch (err) {
+    const latestState = await getState();
+    if (isStopError(err)) {
+      await setStepStatus(7, 'stopped');
+      await addLog('步骤 7 已被用户停止', 'warn');
+      await appendManualAccountRunRecordIfNeeded('step7_stopped', latestState, getErrorMessage(err));
+      throw err;
+    }
+    if (isTerminalSecurityBlockedError(err)) {
+      await handleCloudflareSecurityBlocked(err);
+      throw new Error(STOP_ERROR_MESSAGE);
+    }
+    await setStepStatus(7, 'failed');
+    await addLog(`步骤 7 失败：${getErrorMessage(err)}`, 'error');
+    await appendManualAccountRunRecordIfNeeded('step7_failed', latestState, getErrorMessage(err));
+    throw err;
+  }
+
+  if (postStepDelayMs > 0) {
+    await sleepWithStop(postStepDelayMs);
+  }
 }
 
 async function executeStep6() {
@@ -7251,7 +7577,76 @@ async function executeStep9(state) {
 // Step 10: 平台回调验证
 // ============================================================
 
+async function executeContributionStep10(state) {
+  if (state.localhostUrl && !isLocalhostOAuthCallbackUrl(state.localhostUrl)) {
+    throw new Error('步骤 9 捕获到的 localhost OAuth 回调地址无效，请重新执行步骤 9。');
+  }
+  if (!state.localhostUrl) {
+    throw new Error('缺少 localhost 回调地址，请先完成步骤 9。');
+  }
+  if (!state.contributionSessionId) {
+    throw new Error('缺少贡献会话信息，请重新从步骤 7 开始。');
+  }
+  if (!contributionOAuthManager?.pollContributionStatus) {
+    throw new Error('贡献 OAuth 流程尚未接入，无法完成贡献模式的步骤 10。');
+  }
+
+  await addLog('步骤 10：贡献模式正在提交回调并等待最终结果...');
+
+  let latestState = await getState();
+  const callbackUrl = latestState.localhostUrl || state.localhostUrl;
+
+  if (!latestState.contributionCallbackUrl && contributionOAuthManager?.handleCapturedCallback) {
+    latestState = await contributionOAuthManager.handleCapturedCallback(callbackUrl, {
+      source: 'step10',
+    });
+  } else {
+    latestState = await contributionOAuthManager.pollContributionStatus({
+      reason: 'step10_initial',
+      stateOverride: latestState,
+    });
+  }
+
+  const timeoutMs = typeof getOAuthFlowStepTimeoutMs === 'function'
+    ? await getOAuthFlowStepTimeoutMs(120000, {
+      step: 10,
+      actionLabel: '贡献流程最终结果',
+    })
+    : 120000;
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < timeoutMs) {
+    const status = String(latestState.contributionStatus || '').trim().toLowerCase();
+    if (contributionOAuthManager?.isContributionFinalStatus?.(status)) {
+      if (status === 'auto_approved' || status === 'manual_review_required') {
+        await addLog(`步骤 10：贡献流程已结束，最终状态：${latestState.contributionStatusMessage || status}`, status === 'auto_approved' ? 'ok' : 'warn');
+        await completeStepFromBackground(10, {
+          contributionStatus: status,
+          contributionStatusMessage: latestState.contributionStatusMessage || '',
+          localhostUrl: callbackUrl,
+        });
+        return;
+      }
+      throw new Error(latestState.contributionStatusMessage || '贡献流程失败。');
+    }
+
+    await sleepWithStop(2500);
+    latestState = await contributionOAuthManager.pollContributionStatus({
+      reason: 'step10_wait_final',
+      stateOverride: latestState,
+    });
+  }
+
+  throw new Error('步骤 10：等待贡献流程最终结果超时。');
+}
+
 async function executeStep10(state) {
+  if (state?.contributionModeExpected && !state?.contributionMode) {
+    throw new Error('步骤 10：当前自动流程预期使用贡献模式，但运行态 contributionMode 已丢失，已阻止回退到普通 CPA / SUB2API 提交。请重新进入贡献模式后再点击自动。');
+  }
+  if (state?.contributionMode) {
+    return executeContributionStep10(state);
+  }
   return step10Executor.executeStep10(state);
 }
 

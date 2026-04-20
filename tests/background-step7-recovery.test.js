@@ -10,8 +10,7 @@ test('step 8 submits login verification directly without replaying step 7', asyn
   const calls = {
     ensureReady: 0,
     ensureReadyOptions: [],
-    executeStep7: 0,
-    sleep: [],
+    rerunStep7: 0,
     resolveOptions: null,
     setStates: [],
   };
@@ -32,8 +31,8 @@ test('step 8 submits login verification directly without replaying step 7', asyn
       calls.ensureReadyOptions.push(options || null);
       return { state: 'verification_page', displayedEmail: 'display.user@example.com' };
     },
-    executeStep7: async () => {
-      calls.executeStep7 += 1;
+    rerunStep7ForStep8Recovery: async () => {
+      calls.rerunStep7 += 1;
     },
     getOAuthFlowRemainingMs: async () => 5000,
     getOAuthFlowStepTimeoutMs: async (defaultTimeoutMs) => Math.min(defaultTimeoutMs, 5000),
@@ -59,9 +58,6 @@ test('step 8 submits login verification directly without replaying step 7', asyn
     },
     setStepStatus: async () => {},
     shouldUseCustomRegistrationEmail: () => false,
-    sleepWithStop: async (ms) => {
-      calls.sleep.push(ms);
-    },
     STANDARD_MAIL_VERIFICATION_RESEND_INTERVAL_MS: 25000,
     STEP7_MAIL_POLLING_RECOVERY_MAX_ATTEMPTS: 8,
     throwIfStopped: () => {},
@@ -79,8 +75,7 @@ test('step 8 submits login verification directly without replaying step 7', asyn
 
   assert.equal(calls.resolveOptions.beforeSubmit, undefined);
   assert.equal(calls.ensureReady, 1);
-  assert.equal(calls.executeStep7, 0);
-  assert.deepStrictEqual(calls.sleep, []);
+  assert.equal(calls.rerunStep7, 0);
   assert.equal(calls.resolveOptions.filterAfterTimestamp, 123456);
   assert.equal(typeof calls.resolveOptions.getRemainingTimeMs, 'function');
   assert.equal(await calls.resolveOptions.getRemainingTimeMs({ actionLabel: '登录验证码流程' }), 5000);
@@ -107,7 +102,7 @@ test('step 8 disables resend interval for 2925 mailbox polling', async () => {
     CLOUDFLARE_TEMP_EMAIL_PROVIDER: 'cloudflare-temp-email',
     confirmCustomVerificationStepBypass: async () => {},
     ensureStep8VerificationPageReady: async () => ({ state: 'verification_page' }),
-    executeStep7: async () => {},
+    rerunStep7ForStep8Recovery: async () => {},
     getOAuthFlowRemainingMs: async () => 8000,
     getOAuthFlowStepTimeoutMs: async (defaultTimeoutMs) => Math.min(defaultTimeoutMs, 8000),
     getMailConfig: () => ({
@@ -130,7 +125,6 @@ test('step 8 disables resend interval for 2925 mailbox polling', async () => {
     setState: async () => {},
     setStepStatus: async () => {},
     shouldUseCustomRegistrationEmail: () => false,
-    sleepWithStop: async () => {},
     STANDARD_MAIL_VERIFICATION_RESEND_INTERVAL_MS: 25000,
     STEP7_MAIL_POLLING_RECOVERY_MAX_ATTEMPTS: 8,
     throwIfStopped: () => {},
@@ -161,7 +155,7 @@ test('step 8 falls back to the run email when the verification page does not exp
     CLOUDFLARE_TEMP_EMAIL_PROVIDER: 'cloudflare-temp-email',
     confirmCustomVerificationStepBypass: async () => {},
     ensureStep8VerificationPageReady: async () => ({ state: 'verification_page', displayedEmail: '' }),
-    executeStep7: async () => {},
+    rerunStep7ForStep8Recovery: async () => {},
     getOAuthFlowRemainingMs: async () => 8000,
     getOAuthFlowStepTimeoutMs: async (defaultTimeoutMs) => Math.min(defaultTimeoutMs, 8000),
     getMailConfig: () => ({
@@ -184,7 +178,6 @@ test('step 8 falls back to the run email when the verification page does not exp
     setState: async () => {},
     setStepStatus: async () => {},
     shouldUseCustomRegistrationEmail: () => false,
-    sleepWithStop: async () => {},
     STANDARD_MAIL_VERIFICATION_RESEND_INTERVAL_MS: 25000,
     STEP7_MAIL_POLLING_RECOVERY_MAX_ATTEMPTS: 8,
     throwIfStopped: () => {},
@@ -201,7 +194,7 @@ test('step 8 falls back to the run email when the verification page does not exp
 
 test('step 8 does not rerun step 7 when verification submit lands on add-phone', async () => {
   const calls = {
-    executeStep7: 0,
+    rerunStep7: 0,
     logs: [],
   };
 
@@ -217,8 +210,8 @@ test('step 8 does not rerun step 7 when verification submit lands on add-phone',
     CLOUDFLARE_TEMP_EMAIL_PROVIDER: 'cloudflare-temp-email',
     confirmCustomVerificationStepBypass: async () => {},
     ensureStep8VerificationPageReady: async () => ({ state: 'verification_page' }),
-    executeStep7: async () => {
-      calls.executeStep7 += 1;
+    rerunStep7ForStep8Recovery: async () => {
+      calls.rerunStep7 += 1;
     },
     getOAuthFlowRemainingMs: async () => 8000,
     getOAuthFlowStepTimeoutMs: async (defaultTimeoutMs) => Math.min(defaultTimeoutMs, 8000),
@@ -242,7 +235,6 @@ test('step 8 does not rerun step 7 when verification submit lands on add-phone',
     setState: async () => {},
     setStepStatus: async () => {},
     shouldUseCustomRegistrationEmail: () => false,
-    sleepWithStop: async () => {},
     STANDARD_MAIL_VERIFICATION_RESEND_INTERVAL_MS: 25000,
     STEP7_MAIL_POLLING_RECOVERY_MAX_ATTEMPTS: 8,
     throwIfStopped: () => {},
@@ -257,6 +249,6 @@ test('step 8 does not rerun step 7 when verification submit lands on add-phone',
     /add-phone/
   );
 
-  assert.equal(calls.executeStep7, 0);
+  assert.equal(calls.rerunStep7, 0);
   assert.ok(!calls.logs.some(({ message }) => /准备从步骤 7 重新开始/.test(message)));
 });
