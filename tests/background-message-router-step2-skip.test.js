@@ -11,6 +11,7 @@ function createRouter(overrides = {}) {
     logs: [],
     stepStatuses: [],
     emailStates: [],
+    stateUpdates: [],
     finalizePayloads: [],
     notifyCompletions: [],
     notifyErrors: [],
@@ -100,7 +101,9 @@ function createRouter(overrides = {}) {
     setLuckmailPurchasePreservedState: async () => {},
     setLuckmailPurchaseUsedState: async () => {},
     setPersistentSettings: async () => {},
-    setState: async () => {},
+    setState: async (payload) => {
+      events.stateUpdates.push(payload);
+    },
     setStepStatus: async (step, status) => {
       events.stepStatuses.push({ step, status });
     },
@@ -141,6 +144,31 @@ test('message router does not overwrite a completed step 3 when step 2 is replay
   });
 
   assert.deepStrictEqual(events.stepStatuses, []);
+});
+
+test('message router skips step 5 when step 4 lands on existing-account branch', async () => {
+  const { router, events } = createRouter({
+    state: { stepStatuses: { 5: 'pending' } },
+  });
+
+  await router.handleStepData(4, {
+    emailTimestamp: 456,
+    directProceedToStep6: true,
+    landingState: 'password_page',
+  });
+
+  assert.deepStrictEqual(events.stateUpdates, [
+    {
+      lastEmailTimestamp: 456,
+      signupVerificationRequestedAt: null,
+      skipSignupProfileStep: true,
+    },
+  ]);
+  assert.deepStrictEqual(events.stepStatuses, [{ step: 5, status: 'skipped' }]);
+  assert.equal(
+    events.logs.some(({ message }) => /已注册账号分支（落点：password_page）/.test(message)),
+    true
+  );
 });
 
 test('message router finalizes step 3 before marking it completed', async () => {

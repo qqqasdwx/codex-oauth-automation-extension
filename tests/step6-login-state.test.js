@@ -160,6 +160,18 @@ return {
   assert.strictEqual(snapshot.state, 'unknown', '第六步应忽略 oauth_consent_page 状态');
 }
 
+{
+  const api = createApi({
+    oauthConsentPage: true,
+    consentReady: true,
+    href: 'https://auth.openai.com/authorize',
+    pathname: '/authorize',
+  });
+
+  const snapshot = api.inspectLoginAuthState();
+  assert.strictEqual(snapshot.oauthConsentPage, true);
+}
+
 assert.ok(
   !extractFunction('inspectLoginAuthState').includes("state: 'oauth_consent_page'"),
   'inspectLoginAuthState 不应再产出 oauth_consent_page 状态'

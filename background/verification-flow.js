@@ -13,6 +13,7 @@
       getState,
       getTabId,
       HOTMAIL_PROVIDER,
+      isRetryableContentScriptTransportError,
       isStopError,
       LUCKMAIL_PROVIDER,
       MAIL_2925_VERIFICATION_INTERVAL_MS,
@@ -30,12 +31,103 @@
       VERIFICATION_POLL_MAX_ROUNDS,
     } = deps;
 
+    const step4HomeObservations = new Map();
+
     function getVerificationCodeStateKey(step) {
       return step === 4 ? 'lastSignupCode' : 'lastLoginCode';
     }
 
     function getVerificationCodeLabel(step) {
       return step === 4 ? '注册' : '登录';
+    }
+
+    function parseUrlSafely(rawUrl) {
+      try {
+        return new URL(String(rawUrl || ''));
+      } catch {
+        return null;
+      }
+    }
+
+    function isStep4DirectProceedHomeUrl(rawUrl) {
+      const parsed = parseUrlSafely(rawUrl);
+      if (!parsed) return false;
+
+      const hostname = String(parsed.hostname || '').toLowerCase();
+      const path = String(parsed.pathname || '');
+      return hostname === 'chatgpt.com' && (!path || path === '/');
+    }
+
+    function clearStep4HomeObservation(tabId) {
+      if (!Number.isInteger(tabId)) return;
+      step4HomeObservations.delete(tabId);
+    }
+
+    function isStep4OutcomeTransportPendingError(error) {
+      const fallbackRetryable = (() => {
+        const message = String(typeof error === 'string' ? error : error?.message || '');
+        return /back\/forward cache|message channel is closed|Receiving end does not exist|port closed before a response was received|A listener indicated an asynchronous response|did not respond in \d+s/i.test(message);
+      })();
+
+      if (typeof isRetryableContentScriptTransportError === 'function' && isRetryableContentScriptTransportError(error)) {
+        return true;
+      }
+      if (fallbackRetryable) {
+        return true;
+      }
+
+      const message = String(typeof error === 'string' ? error : error?.message || '');
+      return /等待.+重新就绪超时/i.test(message);
+    }
+
+    async function getStep4DirectProceedSnapshotFromTabUrl(options = {}) {
+      const configuredStableWindowMs = Number(options?.step4DirectProceedStableWindowMs);
+      const stableWindowMs = Number.isFinite(configuredStableWindowMs)
+        ? Math.max(0, Math.floor(configuredStableWindowMs))
+        : 3000;
+      const signupTabId = await getTabId('signup-page');
+      if (!signupTabId || typeof chrome?.tabs?.get !== 'function') {
+        return null;
+      }
+
+      let tab = null;
+      try {
+        tab = await chrome.tabs.get(signupTabId);
+      } catch {
+        clearStep4HomeObservation(signupTabId);
+        return null;
+      }
+
+      const url = String(tab?.url || '').trim();
+      if (!isStep4DirectProceedHomeUrl(url) || tab?.status !== 'complete') {
+        clearStep4HomeObservation(signupTabId);
+        return null;
+      }
+
+      const now = Date.now();
+      const previousObservation = step4HomeObservations.get(signupTabId);
+      if (!previousObservation || previousObservation.url !== url) {
+        step4HomeObservations.set(signupTabId, {
+          url,
+          firstSeenAt: now,
+        });
+        return null;
+      }
+
+      if (now - previousObservation.firstSeenAt < stableWindowMs) {
+        return null;
+      }
+
+      clearStep4HomeObservation(signupTabId);
+      const landingState = 'chatgpt_entry_page';
+
+      return {
+        success: true,
+        directProceedToStep6: true,
+        branch: 'existing_account_login',
+        landingState,
+        url,
+      };
     }
 
     function getVerificationResendStateKey() {
@@ -554,25 +646,50 @@
     }
 
     async function getVerificationSubmitOutcomeSnapshot(step, options = {}) {
+      if (step === 4) {
+        const earlyDirectProceedSnapshot = await getStep4DirectProceedSnapshotFromTabUrl(options);
+        if (earlyDirectProceedSnapshot) {
+          return earlyDirectProceedSnapshot;
+        }
+      }
+
       const sendOutcomeRequest = typeof sendToContentScriptResilient === 'function'
         ? sendToContentScriptResilient
         : sendToContentScript;
-      const result = await sendOutcomeRequest('signup-page', {
-        type: 'GET_VERIFICATION_SUBMIT_OUTCOME',
-        step,
-        source: 'background',
-        payload: {},
-      }, {
-        timeoutMs: await getResponseTimeoutMsForStep(
+      let result = null;
+
+      try {
+        result = await sendOutcomeRequest('signup-page', {
+          type: 'GET_VERIFICATION_SUBMIT_OUTCOME',
           step,
-          options,
-          15000,
-          `检查${getVerificationCodeLabel(step)}验证码提交状态`
-        ),
-        retryDelayMs: 500,
-        logMessage: `步骤 ${step}：验证码提交后页面正在切换，等待状态稳定...`,
-        responseTimeoutMs: 5000,
-      });
+          source: 'background',
+          payload: {},
+        }, step === 4
+          ? {
+              timeoutMs: 1200,
+              retryDelayMs: 250,
+              responseTimeoutMs: 1000,
+            }
+          : {
+              timeoutMs: await getResponseTimeoutMsForStep(
+                step,
+                options,
+                15000,
+                `检查${getVerificationCodeLabel(step)}验证码提交状态`
+              ),
+              retryDelayMs: 500,
+              logMessage: `步骤 ${step}：验证码提交后页面正在切换，等待状态稳定...`,
+              responseTimeoutMs: 5000,
+            });
+      } catch (error) {
+        if (step === 4 && isStep4OutcomeTransportPendingError(error)) {
+          return {
+            pending: true,
+            transportPending: true,
+          };
+        }
+        throw error;
+      }
 
       if (result && result.error) {
         throw new Error(result.error);
@@ -785,16 +902,26 @@
             [stateKey]: result.code,
           });
 
+          const directProceedToStep6 = step === 4 && Boolean(submitResult.directProceedToStep6);
+          const resolvedBranch = directProceedToStep6
+            ? (submitResult.branch || 'existing_account_login')
+            : 'normal';
           await completeStepFromBackground(step, {
             emailTimestamp: result.emailTimestamp,
             code: result.code,
-            branch: 'normal',
+            branch: resolvedBranch,
+            directProceedToStep6,
+            landingState: submitResult.landingState || '',
+            url: submitResult.url || '',
           });
           triggerPostSuccessMailboxCleanup(step, mail);
           return {
-            branch: 'normal',
+            branch: resolvedBranch,
             code: result.code,
             emailTimestamp: result.emailTimestamp,
+            directProceedToStep6,
+            landingState: submitResult.landingState || '',
+            url: submitResult.url || '',
           };
         }
       }

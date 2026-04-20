@@ -207,3 +207,92 @@ return {
   assert.equal(currentState.password, 'Secret123!');
   assert.equal(events.logs.some(({ message }) => /沿用当前邮箱回到步骤 1 重新开始/.test(message)), true);
 });
+
+test('auto-run skips step 5 when step 4 has marked the signup profile step as skipped', async () => {
+  const api = new Function(`
+const AUTO_STEP_DELAYS = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0, 7: 0, 8: 0, 9: 0, 10: 0 };
+const LAST_STEP_ID = 10;
+const FINAL_OAUTH_CHAIN_START_STEP = 7;
+const chrome = {
+  tabs: {
+    update: async () => {},
+  },
+  runtime: {
+    sendMessage: async () => {},
+  },
+};
+
+const currentState = {
+  email: 'keep@example.com',
+  password: 'Secret123!',
+  mailProvider: '163',
+  stepStatuses: {
+    1: 'completed',
+    2: 'completed',
+    3: 'completed',
+    4: 'completed',
+    5: 'skipped',
+    6: 'pending',
+    7: 'pending',
+    8: 'pending',
+    9: 'pending',
+    10: 'pending',
+  },
+};
+const events = {
+  steps: [],
+  logs: [],
+};
+
+async function addLog(message, level = 'info') {
+  events.logs.push({ message, level });
+}
+
+async function ensureAutoEmailReady() {}
+async function broadcastAutoRunStatus() {}
+async function getState() {
+  return currentState;
+}
+function isStopError(error) {
+  return (error?.message || String(error || '')) === '流程已被用户停止。';
+}
+function isStepDoneStatus(status) {
+  return status === 'completed' || status === 'manual_completed' || status === 'skipped';
+}
+async function executeStepAndWait(step) {
+  events.steps.push(step);
+}
+async function getTabId() {
+  return 1;
+}
+async function invalidateDownstreamAfterStepRestart() {}
+function getLoginAuthStateLabel(state) {
+  return state || 'unknown';
+}
+function getErrorMessage(error) {
+  return error?.message || String(error || '');
+}
+async function getLoginAuthStateFromContent() {
+  return { state: 'password_page', url: 'https://auth.openai.com/log-in' };
+}
+
+${bundle}
+
+return {
+  async run() {
+    await runAutoSequenceFromStep(5, {
+      targetRun: 1,
+      totalRuns: 1,
+      attemptRuns: 1,
+      continued: true,
+    });
+    return events;
+  },
+};
+`)();
+
+  const events = await api.run();
+
+  assert.deepStrictEqual(events.steps, [6, 7, 8, 9, 10]);
+  assert.equal(events.logs.some(({ message }) => /步骤 5 当前状态为 skipped/.test(message)), true);
+});

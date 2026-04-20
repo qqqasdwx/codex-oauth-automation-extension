@@ -150,7 +150,26 @@
           await setState({
             lastEmailTimestamp: payload.emailTimestamp || null,
             signupVerificationRequestedAt: null,
+            skipSignupProfileStep: Boolean(payload.directProceedToStep6),
           });
+          if (payload.directProceedToStep6) {
+            const latestState = await getState();
+            const step5Status = latestState.stepStatuses?.[5];
+            if (
+              step5Status !== 'running'
+              && step5Status !== 'completed'
+              && step5Status !== 'manual_completed'
+              && step5Status !== 'skipped'
+            ) {
+              await setStepStatus(5, 'skipped');
+              const landingState = payload.landingState ? `（落点：${payload.landingState}）` : '';
+              await addLog(`步骤 4：当前邮箱已走已注册账号分支${landingState}，无需填写姓名和生日，已自动跳过步骤 5。`, 'warn');
+            }
+          }
+          break;
+        case 5:
+        case 6:
+          await setState({ skipSignupProfileStep: false });
           break;
         case 8:
           await setState({

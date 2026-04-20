@@ -348,6 +348,7 @@ const DEFAULT_STATE = {
   autoRunCountdownNote: '',
   signupVerificationRequestedAt: null,
   loginVerificationRequestedAt: null,
+  skipSignupProfileStep: false,
   oauthFlowDeadlineAt: null,
   currentHotmailAccountId: null,
   currentOutlookEmailAccountId: null,
@@ -4119,6 +4120,7 @@ function getDownstreamStateResets(step) {
       lastSignupCode: null,
       lastLoginCode: null,
       localhostUrl: null,
+      skipSignupProfileStep: false,
     };
   }
   if (step === 2) {
@@ -4131,6 +4133,7 @@ function getDownstreamStateResets(step) {
       lastSignupCode: null,
       lastLoginCode: null,
       localhostUrl: null,
+      skipSignupProfileStep: false,
     };
   }
   if (step === 3 || step === 4) {
@@ -4142,6 +4145,7 @@ function getDownstreamStateResets(step) {
       lastSignupCode: null,
       lastLoginCode: null,
       localhostUrl: null,
+      skipSignupProfileStep: false,
     };
   }
   if (step === 5 || step === 6 || step === 7 || step === 8) {
@@ -4150,6 +4154,7 @@ function getDownstreamStateResets(step) {
       loginVerificationRequestedAt: null,
       oauthFlowDeadlineAt: null,
       localhostUrl: null,
+      skipSignupProfileStep: false,
     };
   }
   if (step === 9) {
@@ -4848,7 +4853,26 @@ async function handleStepData(step, payload) {
       await setState({
         lastEmailTimestamp: payload.emailTimestamp || null,
         signupVerificationRequestedAt: null,
+        skipSignupProfileStep: Boolean(payload.directProceedToStep6),
       });
+      if (payload.directProceedToStep6) {
+        const latestState = await getState();
+        const step5Status = latestState.stepStatuses?.[5];
+        if (
+          step5Status !== 'running'
+          && step5Status !== 'completed'
+          && step5Status !== 'manual_completed'
+          && step5Status !== 'skipped'
+        ) {
+          await setStepStatus(5, 'skipped');
+          const landingState = payload.landingState ? `（落点：${payload.landingState}）` : '';
+          await addLog(`步骤 4：当前邮箱已走已注册账号分支${landingState}，无需填写姓名和生日，已自动跳过步骤 5。`, 'warn');
+        }
+      }
+      break;
+    case 5:
+    case 6:
+      await setState({ skipSignupProfileStep: false });
       break;
     case 8:
       await setState({
@@ -5729,6 +5753,13 @@ async function runAutoSequenceFromStep(startStep, context = {}) {
   let step = Math.max(currentStartStep, 4);
   while (step <= LAST_STEP_ID) {
     try {
+      const currentStepStatus = (await getState()).stepStatuses?.[step] || 'pending';
+      if (isStepDoneStatus(currentStepStatus)) {
+        await addLog(`自动运行：步骤 ${step} 当前状态为 ${currentStepStatus}，将直接继续后续流程。`, 'info');
+        step += 1;
+        continue;
+      }
+
       await executeStepAndWait(step, AUTO_STEP_DELAYS[step]);
       const latestState = await getState();
       step += 1;
@@ -5960,6 +5991,7 @@ const verificationFlowHelpers = self.MultiPageBackgroundVerificationFlow?.create
   getState,
   getTabId,
   HOTMAIL_PROVIDER,
+  isRetryableContentScriptTransportError,
   isStopError,
   LUCKMAIL_PROVIDER,
   MAIL_2925_VERIFICATION_INTERVAL_MS,
@@ -6030,6 +6062,7 @@ const step4Executor = self.MultiPageBackgroundStep4?.createStep4Executor({
 });
 const step5Executor = self.MultiPageBackgroundStep5?.createStep5Executor({
   addLog,
+  completeStepFromBackground,
   generateRandomBirthday,
   generateRandomName,
   sendToContentScript,

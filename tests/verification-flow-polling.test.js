@@ -236,6 +236,378 @@ test('verification flow waits for deferred verification submit outcome after fil
   ]);
 });
 
+test('verification flow carries step 4 existing-account branch into completion payload', async () => {
+  const events = [];
+
+  const helpers = api.createVerificationFlowHelpers({
+    addLog: async () => {},
+    chrome: {
+      tabs: {
+        update: async () => {},
+      },
+    },
+    CLOUDFLARE_TEMP_EMAIL_PROVIDER: 'cloudflare-temp-email',
+    completeStepFromBackground: async (_step, payload) => {
+      events.push(['complete', payload]);
+    },
+    confirmCustomVerificationStepBypassRequest: async () => ({ confirmed: true }),
+    getHotmailVerificationPollConfig: () => ({}),
+    getHotmailVerificationRequestTimestamp: () => 0,
+    getState: async () => ({}),
+    getTabId: async () => 1,
+    HOTMAIL_PROVIDER: 'hotmail-api',
+    isStopError: () => false,
+    LUCKMAIL_PROVIDER: 'luckmail-api',
+    MAIL_2925_VERIFICATION_INTERVAL_MS: 15000,
+    MAIL_2925_VERIFICATION_MAX_ATTEMPTS: 15,
+    pollCloudflareTempEmailVerificationCode: async () => ({}),
+    pollHotmailVerificationCode: async () => ({}),
+    pollLuckmailVerificationCode: async () => ({}),
+    sendToContentScript: async (_source, message) => {
+      if (message.type === 'FILL_CODE') {
+        events.push(['submit', message.payload.code]);
+        return { accepted: true };
+      }
+      throw new Error(`unexpected direct message: ${message.type}`);
+    },
+    sendToContentScriptResilient: async (_source, message) => {
+      if (message.type !== 'GET_VERIFICATION_SUBMIT_OUTCOME') {
+        throw new Error(`unexpected resilient message: ${message.type}`);
+      }
+      return {
+        success: true,
+        directProceedToStep6: true,
+        branch: 'existing_account_login',
+        landingState: 'password_page',
+        url: 'https://auth.openai.com/log-in',
+      };
+    },
+    sendToMailContentScriptResilient: async () => ({
+      code: '654321',
+      emailTimestamp: 123,
+    }),
+    setState: async (payload) => {
+      events.push(['state', payload.lastSignupCode || payload.lastLoginCode]);
+    },
+    setStepStatus: async () => {},
+    sleepWithStop: async () => {},
+    throwIfStopped: () => {},
+    VERIFICATION_POLL_MAX_ROUNDS: 5,
+  });
+
+  const result = await helpers.resolveVerificationStep(
+    4,
+    { email: 'user@example.com', lastSignupCode: null },
+    { provider: 'qq', label: 'QQ 邮箱' },
+    {}
+  );
+
+  assert.deepStrictEqual(events, [
+    ['submit', '654321'],
+    ['state', '654321'],
+    ['complete', {
+      emailTimestamp: 123,
+      code: '654321',
+      branch: 'existing_account_login',
+      directProceedToStep6: true,
+      landingState: 'password_page',
+      url: 'https://auth.openai.com/log-in',
+    }],
+  ]);
+  assert.deepStrictEqual(result, {
+    branch: 'existing_account_login',
+    code: '654321',
+    emailTimestamp: 123,
+    directProceedToStep6: true,
+    landingState: 'password_page',
+    url: 'https://auth.openai.com/log-in',
+  });
+});
+
+test('verification flow short-circuits step 4 outcome polling when tab url already entered existing-account branch', async () => {
+  const events = [];
+  let outcomeProbeCount = 0;
+
+  const helpers = api.createVerificationFlowHelpers({
+    addLog: async () => {},
+    chrome: {
+      tabs: {
+        update: async () => {},
+        get: async () => ({
+          id: 1,
+          url: 'https://chatgpt.com/',
+          status: 'complete',
+        }),
+      },
+    },
+    CLOUDFLARE_TEMP_EMAIL_PROVIDER: 'cloudflare-temp-email',
+    completeStepFromBackground: async (_step, payload) => {
+      events.push(['complete', payload]);
+    },
+    confirmCustomVerificationStepBypassRequest: async () => ({ confirmed: true }),
+    getHotmailVerificationPollConfig: () => ({}),
+    getHotmailVerificationRequestTimestamp: () => 0,
+    getState: async () => ({}),
+    getTabId: async () => 1,
+    HOTMAIL_PROVIDER: 'hotmail-api',
+    isStopError: () => false,
+    LUCKMAIL_PROVIDER: 'luckmail-api',
+    MAIL_2925_VERIFICATION_INTERVAL_MS: 15000,
+    MAIL_2925_VERIFICATION_MAX_ATTEMPTS: 15,
+    pollCloudflareTempEmailVerificationCode: async () => ({}),
+    pollHotmailVerificationCode: async () => ({}),
+    pollLuckmailVerificationCode: async () => ({}),
+    sendToContentScript: async (_source, message) => {
+      if (message.type === 'FILL_CODE') {
+        events.push(['submit', message.payload.code]);
+        return { accepted: true };
+      }
+      throw new Error(`unexpected direct message: ${message.type}`);
+    },
+    sendToContentScriptResilient: async (_source, message) => {
+      if (message.type !== 'GET_VERIFICATION_SUBMIT_OUTCOME') {
+        throw new Error(`unexpected resilient message: ${message.type}`);
+      }
+      outcomeProbeCount += 1;
+      throw new Error('Receiving end does not exist.');
+    },
+    sendToMailContentScriptResilient: async () => ({
+      code: '654321',
+      emailTimestamp: 123,
+    }),
+    setState: async (payload) => {
+      events.push(['state', payload.lastSignupCode || payload.lastLoginCode]);
+    },
+    setStepStatus: async () => {},
+    sleepWithStop: async () => {},
+    throwIfStopped: () => {},
+    VERIFICATION_POLL_MAX_ROUNDS: 5,
+  });
+
+  const result = await helpers.resolveVerificationStep(
+    4,
+    { email: 'user@example.com', lastSignupCode: null },
+    { provider: 'qq', label: 'QQ 邮箱' },
+    { step4DirectProceedStableWindowMs: 0 }
+  );
+
+  assert.equal(outcomeProbeCount, 1);
+  assert.deepStrictEqual(events, [
+    ['submit', '654321'],
+    ['state', '654321'],
+    ['complete', {
+      emailTimestamp: 123,
+      code: '654321',
+      branch: 'existing_account_login',
+      directProceedToStep6: true,
+      landingState: 'chatgpt_entry_page',
+      url: 'https://chatgpt.com/',
+    }],
+  ]);
+  assert.deepStrictEqual(result, {
+    branch: 'existing_account_login',
+    code: '654321',
+    emailTimestamp: 123,
+    directProceedToStep6: true,
+    landingState: 'chatgpt_entry_page',
+    url: 'https://chatgpt.com/',
+  });
+});
+
+test('verification flow does not short-circuit step 4 when new-account flow lands on about-you page', async () => {
+  const events = [];
+  let outcomeChecks = 0;
+
+  const helpers = api.createVerificationFlowHelpers({
+    addLog: async () => {},
+    chrome: {
+      tabs: {
+        update: async () => {},
+        get: async () => ({
+          id: 1,
+          url: 'https://auth.openai.com/about-you',
+          status: 'complete',
+        }),
+      },
+    },
+    CLOUDFLARE_TEMP_EMAIL_PROVIDER: 'cloudflare-temp-email',
+    completeStepFromBackground: async (_step, payload) => {
+      events.push(['complete', payload]);
+    },
+    confirmCustomVerificationStepBypassRequest: async () => ({ confirmed: true }),
+    getHotmailVerificationPollConfig: () => ({}),
+    getHotmailVerificationRequestTimestamp: () => 0,
+    getState: async () => ({}),
+    getTabId: async () => 1,
+    HOTMAIL_PROVIDER: 'hotmail-api',
+    isStopError: () => false,
+    LUCKMAIL_PROVIDER: 'luckmail-api',
+    MAIL_2925_VERIFICATION_INTERVAL_MS: 15000,
+    MAIL_2925_VERIFICATION_MAX_ATTEMPTS: 15,
+    pollCloudflareTempEmailVerificationCode: async () => ({}),
+    pollHotmailVerificationCode: async () => ({}),
+    pollLuckmailVerificationCode: async () => ({}),
+    sendToContentScript: async (_source, message) => {
+      if (message.type === 'FILL_CODE') {
+        events.push(['submit', message.payload.code]);
+        return { accepted: true };
+      }
+      throw new Error(`unexpected direct message: ${message.type}`);
+    },
+    sendToContentScriptResilient: async (_source, message) => {
+      if (message.type !== 'GET_VERIFICATION_SUBMIT_OUTCOME') {
+        throw new Error(`unexpected resilient message: ${message.type}`);
+      }
+      outcomeChecks += 1;
+      return { success: true, url: 'https://auth.openai.com/about-you' };
+    },
+    sendToMailContentScriptResilient: async () => ({
+      code: '654321',
+      emailTimestamp: 123,
+    }),
+    setState: async (payload) => {
+      events.push(['state', payload.lastSignupCode || payload.lastLoginCode]);
+    },
+    setStepStatus: async () => {},
+    sleepWithStop: async () => {},
+    throwIfStopped: () => {},
+    VERIFICATION_POLL_MAX_ROUNDS: 5,
+  });
+
+  const result = await helpers.resolveVerificationStep(
+    4,
+    { email: 'user@example.com', lastSignupCode: null },
+    { provider: 'qq', label: 'QQ 邮箱' },
+    {}
+  );
+
+  assert.equal(outcomeChecks, 1);
+  assert.deepStrictEqual(events, [
+    ['submit', '654321'],
+    ['state', '654321'],
+    ['complete', {
+      emailTimestamp: 123,
+      code: '654321',
+      branch: 'normal',
+      directProceedToStep6: false,
+      landingState: '',
+      url: 'https://auth.openai.com/about-you',
+    }],
+  ]);
+  assert.deepStrictEqual(result, {
+    branch: 'normal',
+    code: '654321',
+    emailTimestamp: 123,
+    directProceedToStep6: false,
+    landingState: '',
+    url: 'https://auth.openai.com/about-you',
+  });
+});
+
+test('verification flow ignores transient chatgpt home url and waits for the final new-account page', async () => {
+  const events = [];
+  let tabReadCount = 0;
+  let outcomeChecks = 0;
+
+  const helpers = api.createVerificationFlowHelpers({
+    addLog: async () => {},
+    chrome: {
+      tabs: {
+        update: async () => {},
+        get: async () => {
+          tabReadCount += 1;
+          if (tabReadCount === 1) {
+            return {
+              id: 1,
+              url: 'https://chatgpt.com/',
+              status: 'complete',
+            };
+          }
+          return {
+            id: 1,
+            url: 'https://auth.openai.com/about-you',
+            status: 'complete',
+          };
+        },
+      },
+    },
+    CLOUDFLARE_TEMP_EMAIL_PROVIDER: 'cloudflare-temp-email',
+    completeStepFromBackground: async (_step, payload) => {
+      events.push(['complete', payload]);
+    },
+    confirmCustomVerificationStepBypassRequest: async () => ({ confirmed: true }),
+    getHotmailVerificationPollConfig: () => ({}),
+    getHotmailVerificationRequestTimestamp: () => 0,
+    getState: async () => ({}),
+    getTabId: async () => 1,
+    HOTMAIL_PROVIDER: 'hotmail-api',
+    isStopError: () => false,
+    LUCKMAIL_PROVIDER: 'luckmail-api',
+    MAIL_2925_VERIFICATION_INTERVAL_MS: 15000,
+    MAIL_2925_VERIFICATION_MAX_ATTEMPTS: 15,
+    pollCloudflareTempEmailVerificationCode: async () => ({}),
+    pollHotmailVerificationCode: async () => ({}),
+    pollLuckmailVerificationCode: async () => ({}),
+    sendToContentScript: async (_source, message) => {
+      if (message.type === 'FILL_CODE') {
+        events.push(['submit', message.payload.code]);
+        return { accepted: true };
+      }
+      throw new Error(`unexpected direct message: ${message.type}`);
+    },
+    sendToContentScriptResilient: async (_source, message) => {
+      if (message.type !== 'GET_VERIFICATION_SUBMIT_OUTCOME') {
+        throw new Error(`unexpected resilient message: ${message.type}`);
+      }
+      outcomeChecks += 1;
+      if (outcomeChecks === 1) {
+        throw new Error('Receiving end does not exist.');
+      }
+      return { success: true, url: 'https://auth.openai.com/about-you' };
+    },
+    sendToMailContentScriptResilient: async () => ({
+      code: '654321',
+      emailTimestamp: 123,
+    }),
+    setState: async (payload) => {
+      events.push(['state', payload.lastSignupCode || payload.lastLoginCode]);
+    },
+    setStepStatus: async () => {},
+    sleepWithStop: async () => {},
+    throwIfStopped: () => {},
+    VERIFICATION_POLL_MAX_ROUNDS: 5,
+  });
+
+  const result = await helpers.resolveVerificationStep(
+    4,
+    { email: 'user@example.com', lastSignupCode: null },
+    { provider: 'qq', label: 'QQ 邮箱' },
+    { step4DirectProceedStableWindowMs: 500 }
+  );
+
+  assert.equal(outcomeChecks, 2);
+  assert.deepStrictEqual(events, [
+    ['submit', '654321'],
+    ['state', '654321'],
+    ['complete', {
+      emailTimestamp: 123,
+      code: '654321',
+      branch: 'normal',
+      directProceedToStep6: false,
+      landingState: '',
+      url: 'https://auth.openai.com/about-you',
+    }],
+  ]);
+  assert.deepStrictEqual(result, {
+    branch: 'normal',
+    code: '654321',
+    emailTimestamp: 123,
+    directProceedToStep6: false,
+    landingState: '',
+    url: 'https://auth.openai.com/about-you',
+  });
+});
+
 test('verification flow triggers 2925 mailbox cleanup only after code submission succeeds', async () => {
   const mailMessages = [];
 
