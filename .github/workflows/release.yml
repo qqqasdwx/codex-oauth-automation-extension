@@ -1,0 +1,66 @@
+name: Publish Release
+
+on:
+  push:
+    tags:
+      - 'Pro*'
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: '已存在的版本标签，例如 Pro4.0'
+        required: true
+      release_name:
+        description: 'Release 展示名称，留空则使用 tag_name'
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  publish-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve release metadata
+        id: meta
+        shell: bash
+        run: |
+          manifest_version_name="$(node -p "require('./manifest.json').version_name")"
+
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            tag_name="${{ github.event.inputs.tag_name }}"
+            release_name="${{ github.event.inputs.release_name }}"
+          else
+            tag_name="${GITHUB_REF_NAME}"
+            release_name=""
+          fi
+
+          if [[ -z "${tag_name}" ]]; then
+            echo "tag_name 不能为空。" >&2
+            exit 1
+          fi
+
+          if [[ "${tag_name}" == Pro* && "${manifest_version_name}" != "${tag_name}" ]]; then
+            echo "manifest.json 的 version_name (${manifest_version_name}) 与 release tag (${tag_name}) 不一致。" >&2
+            exit 1
+          fi
+
+          if [[ -z "${release_name}" ]]; then
+            release_name="${tag_name}"
+          fi
+
+          echo "tag_name=${tag_name}" >> "${GITHUB_OUTPUT}"
+          echo "release_name=${release_name}" >> "${GITHUB_OUTPUT}"
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag_name }}
+          name: ${{ steps.meta.outputs.release_name }}
+          generate_release_notes: false

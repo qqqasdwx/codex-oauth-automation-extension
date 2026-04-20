@@ -1,6 +1,8 @@
 /docs/md
 
-/.github
+/.github/*
+!/.github/workflows/
+!/.github/workflows/*.yml
 /_metadata/
 .vscode
 
