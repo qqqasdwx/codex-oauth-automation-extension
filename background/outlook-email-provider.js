@@ -550,6 +550,13 @@
         await moveOutlookEmailAccountsToGroup([currentAccount.id], successGroupId, {
           state: latestState,
         });
+        try {
+          await fetchOutlookEmailGroups({ state: latestState });
+        } catch (error) {
+          if (typeof addLog === 'function') {
+            await addLog(`OutlookEmail 分组刷新失败：${getErrorMessage(error)}`, 'warn');
+          }
+        }
       } catch (error) {
         moveError = error;
       } finally {
