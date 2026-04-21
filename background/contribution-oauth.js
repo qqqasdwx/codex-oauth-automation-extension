@@ -10,6 +10,8 @@
   const RUNTIME_DEFAULTS = {
     contributionMode: false,
     contributionModeExpected: false,
+    contributionNickname: '',
+    contributionQq: '',
     contributionSessionId: '',
     contributionAuthUrl: '',
     contributionAuthState: '',
@@ -245,9 +247,13 @@
 
     function buildNickname(state = {}, preferredNickname = '') {
       const nickname = normalizeString(preferredNickname)
-        || normalizeString(state.email)
         || normalizeString(state.contributionNickname);
-      return nickname || 'codex-extension-user';
+      return nickname || '';
+    }
+
+    function buildContributionQq(state = {}, preferredQq = '') {
+      const qq = normalizeString(preferredQq) || normalizeString(state.contributionQq);
+      return qq;
     }
 
     function buildStatusMessage(status, payload = {}) {
@@ -592,6 +598,7 @@
         method: 'POST',
         body: {
           nickname: buildNickname(currentState, options.nickname),
+          qq: buildContributionQq(currentState, options.qq),
           source: 'cpa',
           channel: 'codex-extension',
         },

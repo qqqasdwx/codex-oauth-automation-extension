@@ -1,0 +1,707 @@
+(function attachBackgroundMail2925Session(root, factory) {
+  root.MultiPageBackgroundMail2925Session = factory();
+})(typeof self !== 'undefined' ? self : globalThis, function createBackgroundMail2925SessionModule() {
+  function createMail2925SessionManager(deps = {}) {
+    const {
+      addLog,
+      broadcastDataUpdate,
+      chrome,
+      findMail2925Account,
+      getMail2925AccountStatus,
+      isMail2925AccountAvailable,
+      MAIL2925_LIMIT_COOLDOWN_MS,
+      normalizeMail2925Account,
+      normalizeMail2925Accounts,
+      pickMail2925AccountForRun,
+      getState,
+      isAutoRunLockedState,
+      ensureContentScriptReadyOnTab,
+      requestStop,
+      reuseOrCreateTab,
+      sendToContentScriptResilient,
+      sendToMailContentScriptResilient,
+      setPersistentSettings,
+      setState,
+      sleepWithStop,
+      throwIfStopped,
+      upsertMail2925AccountInList,
+      waitForTabUrlMatch,
+    } = deps;
+
+    const MAIL2925_SOURCE = 'mail-2925';
+    const MAIL2925_URL = 'https://2925.com/#/mailList';
+    const MAIL2925_LOGIN_URL = 'https://2925.com/login/';
+    const MAIL2925_INJECT = ['content/utils.js', 'content/mail-2925.js'];
+    const MAIL2925_INJECT_SOURCE = 'mail-2925';
+    const MAIL2925_COOKIE_DOMAINS = [
+      '2925.com',
+      'www.2925.com',
+      'mail2.xiyouji.com',
+    ];
+    const MAIL2925_COOKIE_ORIGINS = [
+      'https://2925.com',
+      'https://www.2925.com',
+      'https://mail2.xiyouji.com',
+    ];
+    const MAIL2925_LIMIT_ERROR_PREFIX = 'MAIL2925_LIMIT_REACHED::';
+    const MAIL2925_THREAD_TERMINATED_ERROR_PREFIX = 'MAIL2925_THREAD_TERMINATED::';
+
+    function getMail2925MailConfig() {
+      return {
+        provider: '2925',
+        source: MAIL2925_SOURCE,
+        url: MAIL2925_URL,
+        label: '2925 邮箱',
+        inject: MAIL2925_INJECT,
+        injectSource: MAIL2925_INJECT_SOURCE,
+      };
+    }
+
+    function getErrorMessage(error) {
+      return String(typeof error === 'string' ? error : error?.message || '');
+    }
+
+    function buildMail2925ThreadTerminatedError(message) {
+      return new Error(`${MAIL2925_THREAD_TERMINATED_ERROR_PREFIX}${String(message || '').trim()}`);
+    }
+
+    async function stopAutoRunForMail2925LoginFailure(errorMessage = '') {
+      if (typeof requestStop !== 'function') {
+        return false;
+      }
+
+      const state = await getState();
+      const autoRunning = typeof isAutoRunLockedState === 'function'
+        ? isAutoRunLockedState(state)
+        : Boolean(state?.autoRunning);
+      if (!autoRunning) {
+        return false;
+      }
+
+      await requestStop({
+        logMessage: errorMessage || '2925 登录失败，已按手动停止逻辑暂停自动流程。',
+      });
+      return true;
+    }
+
+    function isMail2925LimitReachedError(error) {
+      const message = getErrorMessage(error);
+      return message.startsWith(MAIL2925_LIMIT_ERROR_PREFIX)
+        || /子邮箱.{0,12}已达上限|已达上限邮箱|子邮箱上限|邮箱已达上限/i.test(message);
+    }
+
+    function isMail2925ThreadTerminatedError(error) {
+      return getErrorMessage(error).startsWith(MAIL2925_THREAD_TERMINATED_ERROR_PREFIX);
+    }
+
+    async function syncMail2925Accounts(accounts) {
+      const normalized = normalizeMail2925Accounts(accounts);
+      await setPersistentSettings({ mail2925Accounts: normalized });
+      await setState({ mail2925Accounts: normalized });
+      broadcastDataUpdate({ mail2925Accounts: normalized });
+      return normalized;
+    }
+
+    async function upsertMail2925Account(input = {}) {
+      const state = await getState();
+      const accounts = normalizeMail2925Accounts(state.mail2925Accounts);
+      const normalizedEmail = String(input?.email || '').trim().toLowerCase();
+      const existing = input?.id
+        ? findMail2925Account(accounts, input.id)
+        : accounts.find((account) => account.email === normalizedEmail) || null;
+      const credentialsChanged = !existing
+        || (input?.email !== undefined && normalizedEmail !== existing.email)
+        || (input?.password !== undefined && String(input.password || '') !== existing.password);
+      const normalized = normalizeMail2925Account({
+        ...(existing || {}),
+        ...(credentialsChanged ? { lastError: '' } : {}),
+        ...input,
+        id: input?.id || existing?.id || crypto.randomUUID(),
+      });
+
+      const nextAccounts = existing
+        ? accounts.map((account) => (account.id === normalized.id ? normalized : account))
+        : [...accounts, normalized];
+
+      await syncMail2925Accounts(nextAccounts);
+      return normalized;
+    }
+
+    function getCurrentMail2925Account(state = {}) {
+      return findMail2925Account(state.mail2925Accounts, state.currentMail2925AccountId) || null;
+    }
+
+    async function getMail2925CurrentTabUrl() {
+      try {
+        const state = await getState();
+        const tabId = Number(state?.tabRegistry?.[MAIL2925_SOURCE]?.tabId || 0);
+        if (!Number.isInteger(tabId) || tabId <= 0) {
+          return '';
+        }
+        const tab = await chrome.tabs.get(tabId);
+        return String(tab?.url || '').trim();
+      } catch {
+        return '';
+      }
+    }
+
+    async function setCurrentMail2925Account(accountId, options = {}) {
+      const { logMessage = '', updateLastUsedAt = false } = options;
+      const state = await getState();
+      const accounts = normalizeMail2925Accounts(state.mail2925Accounts);
+      const account = findMail2925Account(accounts, accountId);
+      if (!account) {
+        throw new Error('未找到对应的 2925 账号。');
+      }
+
+      let nextAccount = account;
+      if (updateLastUsedAt) {
+        nextAccount = normalizeMail2925Account({
+          ...account,
+          lastUsedAt: Date.now(),
+        });
+        await syncMail2925Accounts(accounts.map((item) => (item.id === account.id ? nextAccount : item)));
+      }
+
+      await setState({ currentMail2925AccountId: nextAccount.id });
+      broadcastDataUpdate({ currentMail2925AccountId: nextAccount.id });
+      if (logMessage) {
+        await addLog(logMessage, 'ok');
+      }
+      return nextAccount;
+    }
+
+    async function patchMail2925Account(accountId, updates = {}) {
+      const state = await getState();
+      const accounts = normalizeMail2925Accounts(state.mail2925Accounts);
+      const account = findMail2925Account(accounts, accountId);
+      if (!account) {
+        throw new Error('未找到对应的 2925 账号。');
+      }
+
+      const nextAccount = normalizeMail2925Account({
+        ...account,
+        ...updates,
+        id: account.id,
+      });
+      await syncMail2925Accounts(accounts.map((item) => (item.id === account.id ? nextAccount : item)));
+
+      if (state.currentMail2925AccountId === account.id && nextAccount.enabled === false) {
+        await setState({ currentMail2925AccountId: null });
+        broadcastDataUpdate({ currentMail2925AccountId: null });
+      }
+
+      return nextAccount;
+    }
+
+    async function deleteMail2925Account(accountId) {
+      const state = await getState();
+      const accounts = normalizeMail2925Accounts(state.mail2925Accounts);
+      const nextAccounts = accounts.filter((account) => account.id !== accountId);
+      await syncMail2925Accounts(nextAccounts);
+
+      if (state.currentMail2925AccountId === accountId) {
+        await setState({ currentMail2925AccountId: null });
+        broadcastDataUpdate({ currentMail2925AccountId: null });
+      }
+    }
+
+    async function deleteMail2925Accounts(mode = 'all') {
+      const state = await getState();
+      const accounts = normalizeMail2925Accounts(state.mail2925Accounts);
+      const nextAccounts = mode === 'all'
+        ? []
+        : accounts.filter((account) => getMail2925AccountStatus(account) !== String(mode || '').trim());
+      const deletedCount = Math.max(0, accounts.length - nextAccounts.length);
+      await syncMail2925Accounts(nextAccounts);
+
+      if (state.currentMail2925AccountId && !findMail2925Account(nextAccounts, state.currentMail2925AccountId)) {
+        await setState({ currentMail2925AccountId: null });
+        broadcastDataUpdate({ currentMail2925AccountId: null });
+      }
+
+      return {
+        deletedCount,
+        remainingCount: nextAccounts.length,
+      };
+    }
+
+    async function ensureMail2925AccountForFlow(options = {}) {
+      const {
+        allowAllocate = true,
+        preferredAccountId = null,
+        excludeIds = [],
+        markUsed = false,
+      } = options;
+      const state = await getState();
+      const accounts = normalizeMail2925Accounts(state.mail2925Accounts);
+      const now = Date.now();
+
+      let account = null;
+      if (preferredAccountId) {
+        account = findMail2925Account(accounts, preferredAccountId);
+      }
+      if (!account && state.currentMail2925AccountId) {
+        account = findMail2925Account(accounts, state.currentMail2925AccountId);
+      }
+      if ((!account || !isMail2925AccountAvailable(account, now)) && allowAllocate) {
+        account = pickMail2925AccountForRun(accounts, {
+          excludeIds,
+          now,
+        });
+      }
+
+      if (!account) {
+        throw new Error('没有可用的 2925 账号。请先在侧边栏添加至少一个带密码的 2925 账号。');
+      }
+      if (!account.password) {
+        throw new Error(`2925 账号 ${account.email || account.id} 缺少密码，无法自动登录。`);
+      }
+      if (!isMail2925AccountAvailable(account, now)) {
+        const disabledUntil = Number(account.disabledUntil || 0);
+        if (disabledUntil > now) {
+          throw new Error(`2925 账号 ${account.email || account.id} 当前处于冷却期，将在 ${new Date(disabledUntil).toLocaleString('zh-CN', { hour12: false })} 后恢复。`);
+        }
+        throw new Error(`2925 账号 ${account.email || account.id} 当前不可用。`);
+      }
+
+      return setCurrentMail2925Account(account.id, { updateLastUsedAt: markUsed });
+    }
+
+    function normalizeCookieDomainForMatch(domain) {
+      return String(domain || '').trim().replace(/^\.+/, '').toLowerCase();
+    }
+
+    function shouldClearMail2925Cookie(cookie) {
+      const domain = normalizeCookieDomainForMatch(cookie?.domain);
+      if (!domain) return false;
+      return MAIL2925_COOKIE_DOMAINS.some((target) => (
+        domain === target || domain.endsWith(`.${target}`)
+      ));
+    }
+
+    function buildCookieRemovalUrl(cookie) {
+      const host = normalizeCookieDomainForMatch(cookie?.domain);
+      const path = String(cookie?.path || '/').startsWith('/')
+        ? String(cookie?.path || '/')
+        : `/${String(cookie?.path || '')}`;
+      return `https://${host}${path}`;
+    }
+
+    async function collectMail2925Cookies() {
+      if (!chrome.cookies?.getAll) {
+        return [];
+      }
+
+      const stores = chrome.cookies.getAllCookieStores
+        ? await chrome.cookies.getAllCookieStores()
+        : [{ id: undefined }];
+      const cookies = [];
+      const seen = new Set();
+
+      for (const store of stores) {
+        const storeId = store?.id;
+        const batch = await chrome.cookies.getAll(storeId ? { storeId } : {});
+        for (const cookie of batch || []) {
+          if (!shouldClearMail2925Cookie(cookie)) continue;
+          const key = [
+            cookie.storeId || storeId || '',
+            cookie.domain || '',
+            cookie.path || '',
+            cookie.name || '',
+            cookie.partitionKey ? JSON.stringify(cookie.partitionKey) : '',
+          ].join('|');
+          if (seen.has(key)) continue;
+          seen.add(key);
+          cookies.push(cookie);
+        }
+      }
+
+      return cookies;
+    }
+
+    async function removeMail2925Cookie(cookie) {
+      const details = {
+        url: buildCookieRemovalUrl(cookie),
+        name: cookie.name,
+      };
+
+      if (cookie.storeId) {
+        details.storeId = cookie.storeId;
+      }
+      if (cookie.partitionKey) {
+        details.partitionKey = cookie.partitionKey;
+      }
+
+      try {
+        return Boolean(await chrome.cookies.remove(details));
+      } catch {
+        return false;
+      }
+    }
+
+    async function clearMail2925SessionCookies() {
+      if (!chrome.cookies?.getAll || !chrome.cookies?.remove) {
+        return 0;
+      }
+
+      const cookies = await collectMail2925Cookies();
+      let removedCount = 0;
+      for (const cookie of cookies) {
+        throwIfStopped();
+        if (await removeMail2925Cookie(cookie)) {
+          removedCount += 1;
+        }
+      }
+
+      if (chrome.browsingData?.removeCookies) {
+        try {
+          await chrome.browsingData.removeCookies({
+            since: 0,
+            origins: MAIL2925_COOKIE_ORIGINS,
+          });
+        } catch (_) {
+          // Best-effort cleanup only.
+        }
+      }
+
+      return removedCount;
+    }
+
+    async function ensureMail2925MailboxSession(options = {}) {
+      const {
+        accountId = null,
+        forceRelogin = false,
+        actionLabel = '确保 2925 邮箱登录态',
+      } = options;
+      const account = await ensureMail2925AccountForFlow({
+        allowAllocate: true,
+        preferredAccountId: accountId,
+      });
+
+      if (forceRelogin) {
+        const removedCount = await clearMail2925SessionCookies();
+        await addLog(`2925：已清理 ${removedCount} 个登录相关 cookie，准备使用 ${account.email} 重新登录。`, 'info');
+      }
+
+      if (forceRelogin && typeof sleepWithStop === 'function') {
+        await sleepWithStop(3000);
+      }
+
+      throwIfStopped();
+      const targetUrl = forceRelogin ? MAIL2925_LOGIN_URL : MAIL2925_URL;
+      const tabId = await reuseOrCreateTab(MAIL2925_SOURCE, targetUrl, {
+        inject: MAIL2925_INJECT,
+        injectSource: MAIL2925_INJECT_SOURCE,
+      });
+      if (forceRelogin && typeof sleepWithStop === 'function') {
+        await sleepWithStop(3000);
+      }
+
+      let result;
+      try {
+        result = await sendToMailContentScriptResilient(
+        getMail2925MailConfig(),
+        {
+          type: 'ENSURE_MAIL2925_SESSION',
+          step: 0,
+          source: 'background',
+          payload: {
+            email: account.email,
+            password: account.password,
+            forceLogin: forceRelogin,
+          },
+        },
+        {
+          timeoutMs: forceRelogin ? 30000 : 25000,
+          responseTimeoutMs: forceRelogin ? 30000 : 25000,
+          maxRecoveryAttempts: 2,
+        }
+      );
+      } catch (err) {
+        const failedUrl = await getMail2925CurrentTabUrl();
+        await addLog(`2925：ENSURE_MAIL2925_SESSION 通信失败，当前地址=${failedUrl || 'unknown'}；原因=${getErrorMessage(err) || 'unknown'}`, 'warn');
+        const stopped = await stopAutoRunForMail2925LoginFailure(
+          `2925：${actionLabel}失败（${getErrorMessage(err) || '20 秒内未进入收件箱'}），已按手动停止逻辑暂停自动流程。`
+        );
+        if (stopped) {
+          throw new Error('流程已被用户停止。');
+        }
+        throw err;
+      }
+
+      if (!result?.loggedIn) {
+        const notLoggedInUrl = await getMail2925CurrentTabUrl();
+        await addLog(`2925：20 秒登录等待结束但仍未进入收件箱，当前地址=${notLoggedInUrl || 'unknown'}`, 'warn');
+        const stopped = await stopAutoRunForMail2925LoginFailure(
+          `2925：${actionLabel}失败（20 秒内未进入收件箱），已按手动停止逻辑暂停自动流程。`
+        );
+        if (stopped) {
+          throw new Error('流程已被用户停止。');
+        }
+        throw new Error(`2925：${actionLabel}失败，当前页面仍未进入收件箱。`);
+      }
+
+      if (result?.error) {
+        const resultErrorUrl = await getMail2925CurrentTabUrl();
+        await addLog(`2925：登录页返回业务错误，当前地址=${resultErrorUrl || 'unknown'}；错误=${result.error}`, 'warn');
+        const stopped = await stopAutoRunForMail2925LoginFailure(
+          `2925：${actionLabel}失败（${result.error}），已按手动停止逻辑暂停自动流程。`
+        );
+        if (stopped) {
+          throw new Error('流程已被用户停止。');
+        }
+        throw new Error(result.error);
+      }
+      if (result?.limitReached) {
+        throw new Error(`${MAIL2925_LIMIT_ERROR_PREFIX}${result.limitMessage || '2925 子邮箱已达上限邮箱'}`);
+      }
+      if (!result?.loggedIn) {
+        throw new Error(`2925：${actionLabel}失败，当前页面仍未进入收件箱。`);
+      }
+
+      await patchMail2925Account(account.id, {
+        lastLoginAt: Date.now(),
+        lastError: '',
+      });
+      await setState({ currentMail2925AccountId: account.id });
+      broadcastDataUpdate({ currentMail2925AccountId: account.id });
+
+      return {
+        account: await ensureMail2925AccountForFlow({
+          allowAllocate: false,
+          preferredAccountId: account.id,
+        }),
+        mail: getMail2925MailConfig(),
+        result,
+      };
+    }
+
+    // Override the earlier version with a simpler login-page-only flow.
+    async function ensureMail2925MailboxSession(options = {}) {
+      const {
+        accountId = null,
+        forceRelogin = false,
+        actionLabel = '确保 2925 邮箱登录态',
+      } = options;
+      const account = await ensureMail2925AccountForFlow({
+        allowAllocate: true,
+        preferredAccountId: accountId,
+      });
+
+      if (forceRelogin) {
+        const removedCount = await clearMail2925SessionCookies();
+        await addLog(`2925：已清理 ${removedCount} 个登录相关 cookie，准备使用 ${account.email} 重新登录。`, 'info');
+        if (typeof sleepWithStop === 'function') {
+          await addLog('2925：清理 cookie 后等待 3 秒，再打开登录页...', 'info');
+          await sleepWithStop(3000);
+        }
+      }
+
+      throwIfStopped();
+      await addLog(`2925：准备打开登录页 ${MAIL2925_LOGIN_URL}（forceRelogin=${forceRelogin ? 'true' : 'false'}）`, 'info');
+      const targetUrl = forceRelogin ? MAIL2925_LOGIN_URL : MAIL2925_URL;
+      const tabId = await reuseOrCreateTab(MAIL2925_SOURCE, targetUrl, {
+        inject: MAIL2925_INJECT,
+        injectSource: MAIL2925_INJECT_SOURCE,
+      });
+      const openedUrl = await getMail2925CurrentTabUrl();
+      await addLog(`2925：打开页后当前标签地址：${openedUrl || 'unknown'}`, 'info');
+
+      if (forceRelogin && typeof waitForTabUrlMatch === 'function') {
+        const matchedLoginTab = await waitForTabUrlMatch(
+          tabId,
+          (url) => {
+            try {
+              const parsed = new URL(String(url || ''));
+              return (parsed.hostname === '2925.com' || parsed.hostname === 'www.2925.com')
+                && /^\/login\/?$/.test(parsed.pathname);
+            } catch {
+              return false;
+            }
+          },
+          { timeoutMs: 15000, retryDelayMs: 300 }
+        );
+        await addLog(`2925：等待最终落到登录页结果：${matchedLoginTab?.url || 'timeout'}`, matchedLoginTab ? 'info' : 'warn');
+        if (matchedLoginTab && typeof ensureContentScriptReadyOnTab === 'function') {
+          await ensureContentScriptReadyOnTab(MAIL2925_SOURCE, tabId, {
+            inject: MAIL2925_INJECT,
+            injectSource: MAIL2925_INJECT_SOURCE,
+            timeoutMs: 20000,
+            retryDelayMs: 800,
+            logMessage: '步骤 0：2925 登录页内容脚本未就绪，正在等待页面稳定后继续登录...',
+          });
+        }
+      }
+
+      if (forceRelogin && typeof sleepWithStop === 'function') {
+        await addLog('2925：登录页已打开，等待 3 秒后开始检查输入框并执行登录...', 'info');
+        await sleepWithStop(3000);
+      }
+
+      const sendLoginMessage = typeof sendToContentScriptResilient === 'function'
+        ? sendToContentScriptResilient
+        : async (source, message, runtimeOptions = {}) => sendToMailContentScriptResilient(
+          getMail2925MailConfig(),
+          message,
+          {
+            timeoutMs: runtimeOptions.timeoutMs,
+            responseTimeoutMs: runtimeOptions.responseTimeoutMs,
+            maxRecoveryAttempts: 0,
+          }
+        );
+
+      let result;
+      try {
+        const beforeSendUrl = await getMail2925CurrentTabUrl();
+        await addLog(`2925：发送 ENSURE_MAIL2925_SESSION 前当前地址：${beforeSendUrl || 'unknown'}`, 'info');
+        result = await sendLoginMessage(
+          MAIL2925_SOURCE,
+          {
+            type: 'ENSURE_MAIL2925_SESSION',
+            step: 0,
+            source: 'background',
+            payload: {
+              email: account.email,
+              password: account.password,
+              forceLogin: forceRelogin,
+            },
+          },
+          {
+            timeoutMs: forceRelogin ? 30000 : 25000,
+            retryDelayMs: 800,
+            responseTimeoutMs: forceRelogin ? 30000 : 25000,
+            logMessage: `步骤 0：2925 登录页通信异常，正在等待当前页面重新就绪后继续确认登录态...`,
+          }
+        );
+      } catch (err) {
+        const stopped = await stopAutoRunForMail2925LoginFailure(
+          `2925：${actionLabel}失败（${getErrorMessage(err) || '20 秒内未进入收件箱'}），已按手动停止逻辑暂停自动流程。`
+        );
+        if (stopped) {
+          throw new Error('流程已被用户停止。');
+        }
+        throw err;
+      }
+
+      if (result?.error) {
+        const stopped = await stopAutoRunForMail2925LoginFailure(
+          `2925：${actionLabel}失败（${result.error}），已按手动停止逻辑暂停自动流程。`
+        );
+        if (stopped) {
+          throw new Error('流程已被用户停止。');
+        }
+        throw new Error(result.error);
+      }
+
+      if (result?.limitReached) {
+        throw new Error(`${MAIL2925_LIMIT_ERROR_PREFIX}${result.limitMessage || '2925 子邮箱已达上限邮箱'}`);
+      }
+
+      if (!result?.loggedIn) {
+        const stopped = await stopAutoRunForMail2925LoginFailure(
+          `2925：${actionLabel}失败（20 秒内未进入收件箱），已按手动停止逻辑暂停自动流程。`
+        );
+        if (stopped) {
+          throw new Error('流程已被用户停止。');
+        }
+        throw new Error(`2925：${actionLabel}失败，当前页面仍未进入收件箱。`);
+      }
+
+      await patchMail2925Account(account.id, {
+        lastLoginAt: Date.now(),
+        lastError: '',
+      });
+      await setState({ currentMail2925AccountId: account.id });
+      broadcastDataUpdate({ currentMail2925AccountId: account.id });
+      const finalUrl = await getMail2925CurrentTabUrl();
+      await addLog(`2925：登录态确认成功，当前地址=${finalUrl || 'unknown'}`, 'ok');
+
+      return {
+        account: await ensureMail2925AccountForFlow({
+          allowAllocate: false,
+          preferredAccountId: account.id,
+        }),
+        mail: getMail2925MailConfig(),
+        result,
+      };
+    }
+
+    async function handleMail2925LimitReachedError(step, error) {
+      const reason = getErrorMessage(error).replace(MAIL2925_LIMIT_ERROR_PREFIX, '').trim()
+        || '子邮箱已达上限邮箱';
+      const state = await getState();
+      const currentAccount = getCurrentMail2925Account(state);
+      if (!currentAccount) {
+        if (typeof requestStop === 'function') {
+          await requestStop({
+            logMessage: `步骤 ${step}：2925 检测到“${reason}”，且当前没有可识别账号，已按手动停止逻辑暂停流程。`,
+          });
+        }
+        return new Error('流程已被用户停止。');
+      }
+
+      const disabledUntil = Date.now() + Math.max(1, Number(MAIL2925_LIMIT_COOLDOWN_MS) || (24 * 60 * 60 * 1000));
+      await patchMail2925Account(currentAccount.id, {
+        lastLimitAt: Date.now(),
+        disabledUntil,
+        lastError: reason,
+      });
+      await addLog(
+        `步骤 ${step}：2925 账号 ${currentAccount.email} 命中“${reason}”，已禁用 24 小时，恢复时间 ${new Date(disabledUntil).toLocaleString('zh-CN', { hour12: false })}。`,
+        'warn'
+      );
+
+      const nextState = await getState();
+      const nextAccounts = normalizeMail2925Accounts(nextState.mail2925Accounts);
+      const nextAccount = pickMail2925AccountForRun(nextAccounts, {
+        excludeIds: [currentAccount.id],
+      });
+
+      if (!nextAccount) {
+        await setState({ currentMail2925AccountId: null });
+        broadcastDataUpdate({ currentMail2925AccountId: null });
+        if (typeof requestStop === 'function') {
+          await requestStop({
+            logMessage: `步骤 ${step}：2925 账号 ${currentAccount.email} 已因“${reason}”禁用 24 小时，且当前没有可切换的下一个账号，已按手动停止逻辑暂停流程。`,
+          });
+        }
+        return new Error('流程已被用户停止。');
+      }
+
+      await setCurrentMail2925Account(nextAccount.id);
+      await ensureMail2925MailboxSession({
+        accountId: nextAccount.id,
+        forceRelogin: true,
+        actionLabel: `步骤 ${step}：切换 2925 账号`,
+      });
+      await addLog(`步骤 ${step}：2925 已自动切换到下一个账号 ${nextAccount.email} 并完成登录，当前尝试将直接结束。`, 'warn');
+      return buildMail2925ThreadTerminatedError(
+        `步骤 ${step}：2925 账号 ${currentAccount.email} 命中“${reason}”并已禁用 24 小时，已切换到 ${nextAccount.email}，当前尝试结束，等待自动重试进入下一次尝试。`
+      );
+    }
+
+    return {
+      MAIL2925_LIMIT_ERROR_PREFIX,
+      MAIL2925_THREAD_TERMINATED_ERROR_PREFIX,
+      clearMail2925SessionCookies,
+      deleteMail2925Account,
+      deleteMail2925Accounts,
+      ensureMail2925AccountForFlow,
+      ensureMail2925MailboxSession,
+      getCurrentMail2925Account,
+      getMail2925MailConfig,
+      handleMail2925LimitReachedError,
+      isMail2925LimitReachedError,
+      isMail2925ThreadTerminatedError,
+      patchMail2925Account,
+      setCurrentMail2925Account,
+      syncMail2925Accounts,
+      upsertMail2925Account,
+    };
+  }
+
+  return {
+    createMail2925SessionManager,
+  };
+});

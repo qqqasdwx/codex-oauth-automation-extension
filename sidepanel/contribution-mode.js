@@ -12,7 +12,7 @@
       constants = {},
     } = context;
 
-    const contributionUploadUrl = constants.contributionUploadUrl || 'https://apikey.qzz.io/';
+    const contributionUploadUrl = constants.contributionUploadUrl || 'https://apikey.qzz.io';
     const pollIntervalMs = Math.max(1500, Math.floor(Number(constants.pollIntervalMs) || 2500));
 
     const hiddenRows = [
@@ -25,7 +25,6 @@
       dom.rowSub2ApiGroup,
       dom.rowSub2ApiDefaultProxy,
       dom.rowCustomPassword,
-      dom.rowAccountRunHistoryTextEnabled,
       dom.rowAccountRunHistoryHelperBaseUrl,
     ].filter(Boolean);
 
@@ -174,6 +173,36 @@
       return normalizeString(currentState.contributionStatusMessage) || DEFAULT_COPY;
     }
 
+    function getContributionUploadPageUrl() {
+      return normalizeString(contributionUploadUrl);
+    }
+
+    function openContributionUploadPage() {
+      const targetUrl = getContributionUploadPageUrl();
+      if (!targetUrl) {
+        return;
+      }
+      helpers.openExternalUrl?.(targetUrl);
+    }
+
+    async function syncContributionProfile(partial = {}) {
+      const payload = {
+        nickname: normalizeString(partial.nickname),
+        qq: normalizeString(partial.qq),
+      };
+      const response = await runtime.sendMessage({
+        type: 'SET_CONTRIBUTION_PROFILE',
+        source: 'sidepanel',
+        payload,
+      });
+      if (response?.error) {
+        throw new Error(response.error);
+      }
+      if (response?.state) {
+        helpers.applySettingsState?.(response.state);
+      }
+    }
+
     async function requestContributionMode(enabled) {
       const response = await runtime.sendMessage({
         type: 'SET_CONTRIBUTION_MODE',
@@ -234,6 +263,13 @@
         throw new Error('贡献模式尚未接入主自动流程启动能力。');
       }
 
+      const profile = helpers.getContributionProfile?.() || {};
+      const qq = normalizeString(profile.qq);
+      if (qq && !/^\d{1,20}$/.test(qq)) {
+        throw new Error('QQ 只能填写数字，且长度不能超过 20 位。');
+      }
+      await syncContributionProfile(profile);
+
       const started = await helpers.startContributionAutoRun();
       if (!started) {
         return;
@@ -258,6 +294,7 @@
       const currentState = getLatestState();
       const enabled = isContributionModeEnabled(currentState);
       const blocked = isModeSwitchBlocked();
+      const activeElement = typeof document !== 'undefined' ? document.activeElement : null;
 
       if (enabled && dom.selectPanelMode) {
         dom.selectPanelMode.value = 'cpa';
@@ -271,6 +308,18 @@
       }
       if (dom.contributionModeText) {
         dom.contributionModeText.textContent = DEFAULT_COPY;
+      }
+      if (dom.inputContributionNickname && activeElement !== dom.inputContributionNickname) {
+        const nextNickname = normalizeString(currentState.contributionNickname);
+        if (nextNickname || !normalizeString(dom.inputContributionNickname.value)) {
+          dom.inputContributionNickname.value = nextNickname;
+        }
+      }
+      if (dom.inputContributionQq && activeElement !== dom.inputContributionQq) {
+        const nextQq = normalizeString(currentState.contributionQq);
+        if (nextQq || !normalizeString(dom.inputContributionQq.value)) {
+          dom.inputContributionQq.value = nextQq;
+        }
       }
       if (dom.contributionOauthStatus) {
         dom.contributionOauthStatus.textContent = getOauthStatusText(currentState);
@@ -323,6 +372,11 @@
           return;
         }
         actionInFlight = true;
+        try {
+          openContributionUploadPage();
+        } catch (error) {
+          helpers.showToast?.(`打开上传页面失败：${error.message}`, 'error');
+        }
         render();
         try {
           await enterContributionMode();
@@ -350,9 +404,35 @@
         }
       });
 
+      dom.inputContributionNickname?.addEventListener('change', async () => {
+        try {
+          await syncContributionProfile({
+            nickname: dom.inputContributionNickname?.value,
+            qq: dom.inputContributionQq?.value,
+          });
+        } catch (error) {
+          helpers.showToast?.(error.message, 'error');
+        } finally {
+          render();
+        }
+      });
+
+      dom.inputContributionQq?.addEventListener('change', async () => {
+        try {
+          await syncContributionProfile({
+            nickname: dom.inputContributionNickname?.value,
+            qq: dom.inputContributionQq?.value,
+          });
+        } catch (error) {
+          helpers.showToast?.(error.message, 'error');
+        } finally {
+          render();
+        }
+      });
+
       dom.btnOpenContributionUpload?.addEventListener('click', () => {
         try {
-          helpers.openExternalUrl?.(contributionUploadUrl);
+          openContributionUploadPage();
         } catch (error) {
           helpers.showToast?.(`打开上传页面失败：${error.message}`, 'error');
         }

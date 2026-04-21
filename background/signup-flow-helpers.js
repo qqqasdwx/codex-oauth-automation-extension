@@ -9,6 +9,7 @@
       ensureContentScriptReadyOnTab,
       ensureHotmailAccountForFlow,
       ensureOutlookEmailAccountForFlow,
+      ensureMail2925AccountForFlow,
       ensureLuckmailPurchaseForFlow,
       isGeneratedAliasProvider,
       isReusableGeneratedAliasEmail,
@@ -214,6 +215,15 @@
         const purchase = await ensureLuckmailPurchaseForFlow({ allowReuse: true });
         resolvedEmail = purchase.email_address;
       } else if (isGeneratedAliasProvider(state)) {
+        if (Boolean(state?.mail2925UseAccountPool)
+          && String(state?.mailProvider || '').trim().toLowerCase() === '2925'
+          && typeof ensureMail2925AccountForFlow === 'function') {
+          await ensureMail2925AccountForFlow({
+            allowAllocate: true,
+            preferredAccountId: state.currentMail2925AccountId || null,
+            markUsed: true,
+          });
+        }
         if (!isReusableGeneratedAliasEmail?.(state, resolvedEmail)) {
           resolvedEmail = buildGeneratedAliasEmail(state);
         }

@@ -204,3 +204,25 @@ test('auth page recovery throws cloudflare security blocked error on max_check_a
   );
 });
 
+test('auth page recovery throws signup user already exists error without clicking retry', async () => {
+  const state = {
+    clickCount: 0,
+    pageText: 'Something went wrong. user_already_exists.',
+    pathname: '/email-verification',
+    retryVisible: true,
+  };
+  const api = createRecoveryApi(state);
+
+  await assert.rejects(
+    () => api.recoverAuthRetryPage({
+      logLabel: '步骤 4：检测到注册认证重试页，正在点击“重试”恢复',
+      pathPatterns: [/\/email-verification(?:[/?#]|$)/i],
+      step: 4,
+      timeoutMs: 1000,
+    }),
+    /SIGNUP_USER_ALREADY_EXISTS::/
+  );
+
+  assert.equal(state.clickCount, 0);
+});
+

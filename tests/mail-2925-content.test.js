@@ -4,6 +4,10 @@ const fs = require('node:fs');
 
 const source = fs.readFileSync('content/mail-2925.js', 'utf8');
 
+test('ensureMail2925Session waits at most 20 seconds for mailbox after clicking login', () => {
+  assert.match(source, /waitForMail2925View\('mailbox',\s*20000\)/);
+});
+
 function extractFunction(name) {
   const markers = [`async function ${name}(`, `function ${name}(`];
   const start = markers
@@ -52,7 +56,10 @@ function extractFunction(name) {
 }
 
 test('handlePollEmail establishes a baseline after opening from detail view and only picks mail from a later refresh', async () => {
-  const bundle = extractFunction('handlePollEmail');
+  const bundle = [
+    extractFunction('normalizeMinuteTimestamp'),
+    extractFunction('handlePollEmail'),
+  ].join('\n');
 
   const api = new Function(`
 let state = 'detail';
@@ -60,13 +67,22 @@ let refreshCalls = 0;
 const clickOrder = [];
 const readAndDeleteCalls = [];
 const seenCodes = new Set();
+const deletedMailIds = new Set();
 const baselineMail = { id: 'baseline', text: 'OpenAI newsletter without code' };
 const newMail = { id: 'new', text: 'OpenAI verification code 654321' };
 
 function findMailItems() {
-  if (state === 'detail') return [];
-  if (state === 'baseline') return [baselineMail];
-  return [baselineMail, newMail];
+  const items = [];
+  if (state === 'detail') return items;
+  if (state === 'baseline' || state === 'with-new') {
+    if (!deletedMailIds.has('baseline')) {
+      items.push(baselineMail);
+    }
+  }
+  if (state === 'with-new' && !deletedMailIds.has('new')) {
+    items.push(newMail);
+  }
+  return items;
 }
 
 function getMailItemId(item) {
@@ -99,7 +115,9 @@ async function sleepRandom() {}
 
 async function returnToInbox() {
   clickOrder.push('inbox');
-  state = 'baseline';
+  if (state === 'detail') {
+    state = 'baseline';
+  }
   return true;
 }
 
@@ -113,6 +131,7 @@ async function refreshInbox() {
 
 async function openMailAndDeleteAfterRead(item) {
   readAndDeleteCalls.push(item.id);
+  deletedMailIds.add(item.id);
   return item.id === 'new' ? 'Your ChatGPT code is 654321' : 'No code here';
 }
 
@@ -142,11 +161,14 @@ return {
 
   assert.equal(result.code, '654321');
   assert.deepEqual(api.getClickOrder(), ['inbox', 'refresh', 'inbox', 'refresh']);
-  assert.deepEqual(api.getReadAndDeleteCalls(), ['new']);
+  assert.deepEqual(api.getReadAndDeleteCalls(), ['baseline', 'new']);
 });
 
 test('handlePollEmail ignores targetEmail and still tests any matching ChatGPT mail', async () => {
-  const bundle = extractFunction('handlePollEmail');
+  const bundle = [
+    extractFunction('normalizeMinuteTimestamp'),
+    extractFunction('handlePollEmail'),
+  ].join('\n');
 
   const api = new Function(`
 let state = 'empty';
@@ -224,6 +246,94 @@ return {
 
   assert.equal(result.code, '112233');
   assert.deepEqual(api.getReadAndDeleteCalls(), ['mail-1']);
+});
+
+test('handlePollEmail only accepts 2925 mails inside the fixed lookback window', async () => {
+  const bundle = [
+    extractFunction('normalizeMinuteTimestamp'),
+    extractFunction('handlePollEmail'),
+  ].join('\n');
+
+  const api = new Function(`
+let state = 'ready';
+const seenCodes = new Set();
+const readAndDeleteCalls = [];
+const oldMail = {
+  id: 'mail-old',
+  text: 'OpenAI verification code 111111',
+  timestamp: 1000,
+};
+const windowMail = {
+  id: 'mail-window',
+  text: 'OpenAI verification code 222222',
+  timestamp: 301000,
+};
+
+function findMailItems() {
+  return state === 'ready' ? [oldMail, windowMail] : [];
+}
+
+function getMailItemId(item) {
+  return item.id;
+}
+
+function getCurrentMailIds(items = []) {
+  return new Set(items.map((item) => item.id));
+}
+
+function parseMailItemTimestamp(item) {
+  return item.timestamp;
+}
+
+function matchesMailFilters(text) {
+  return /openai|verification/i.test(String(text || ''));
+}
+
+function getMailItemText(item) {
+  return item.text;
+}
+
+function extractVerificationCode(text) {
+  const match = String(text || '').match(/(\\d{6})/);
+  return match ? match[1] : null;
+}
+
+async function sleep() {}
+async function sleepRandom() {}
+async function returnToInbox() {
+  return true;
+}
+async function refreshInbox() {}
+
+async function openMailAndDeleteAfterRead(item) {
+  readAndDeleteCalls.push(item.id);
+  return item.text;
+}
+
+async function ensureSeenCodesSession() {}
+function persistSeenCodes() {}
+function log() {}
+
+${bundle}
+
+return {
+  handlePollEmail,
+  getReadAndDeleteCalls() {
+    return readAndDeleteCalls.slice();
+  },
+};
+`)();
+
+  const result = await api.handlePollEmail(4, {
+    senderFilters: ['openai'],
+    subjectFilters: ['verification'],
+    maxAttempts: 1,
+    intervalMs: 1,
+    filterAfterTimestamp: 120000,
+  });
+
+  assert.equal(result.code, '222222');
+  assert.deepEqual(api.getReadAndDeleteCalls(), ['mail-window']);
 });
 
 test('ensureSeenCodesSession resets tried codes only when a new verification step session starts', async () => {
@@ -419,10 +529,15 @@ test('deleteAllMailboxEmails selects all messages and clicks delete', async () =
 const calls = [];
 const selectAllControl = { kind: 'select-all' };
 const deleteButton = { kind: 'delete' };
+let mailboxCleared = false;
 
 async function returnToInbox() {
   calls.push('inbox');
   return true;
+}
+
+function findMailItems() {
+  return mailboxCleared ? [] : [{ id: 'mail-1' }];
 }
 
 function findSelectAllControl() {
@@ -444,11 +559,13 @@ function simulateClick(node) {
   }
   if (node === deleteButton) {
     calls.push('delete');
+    mailboxCleared = true;
     return;
   }
   throw new Error('unexpected node');
 }
 
+async function sleep() {}
 async function sleepRandom() {}
 
 const console = { warn() {} };
@@ -468,4 +585,188 @@ return {
 
   assert.equal(result, true);
   assert.deepEqual(api.getCalls(), ['inbox', 'select-all', 'delete']);
+});
+
+test('findAgreementCheckbox skips 30-day login checkbox and picks agreement checkbox', async () => {
+  const bundle = [
+    extractFunction('normalizeNodeText'),
+    extractFunction('isVisibleNode'),
+    extractFunction('resolveActionTarget'),
+    extractFunction('findAgreementContainer'),
+    extractFunction('isAgreementText'),
+    extractFunction('getCheckboxContextText'),
+    extractFunction('findAgreementCheckbox'),
+  ].join('\n');
+
+  const api = new Function(`
+const MAIL2925_REMEMBER_LOGIN_PATTERNS = [
+  /30天内免登录/,
+  /免登录/,
+  /记住登录/,
+  /保持登录/,
+];
+const MAIL2925_AGREEMENT_PATTERNS = [
+  /我已阅读并同意/,
+  /服务协议/,
+  /隐私政策/,
+];
+
+const rememberCheckbox = {
+  kind: 'remember-checkbox',
+  disabled: false,
+  readOnly: false,
+  hidden: false,
+  classList: { contains() { return false; } },
+  getBoundingClientRect() { return { width: 14, height: 14 }; },
+  closest(selector) {
+    if (selector === 'button, [role="button"], a, label, .el-checkbox, .el-checkbox__input') return this;
+    if (selector === 'label') return rememberLabel;
+    if (selector === 'label, div, span, p, li, form') return rememberLabel;
+    return null;
+  },
+};
+const agreementCheckbox = {
+  kind: 'agreement-checkbox',
+  disabled: false,
+  readOnly: false,
+  hidden: false,
+  classList: { contains() { return false; } },
+  getBoundingClientRect() { return { width: 14, height: 14 }; },
+  closest(selector) {
+    if (selector === 'button, [role="button"], a, label, .el-checkbox, .el-checkbox__input') return this;
+    if (selector === 'label') return agreementLabel;
+    if (selector === 'label, div, span, p, li, form') return agreementLabel;
+    return null;
+  },
+};
+const rememberLabel = {
+  innerText: '30天内免登录',
+  textContent: '30天内免登录',
+  hidden: false,
+  getBoundingClientRect() { return { width: 100, height: 20 }; },
+  parentElement: null,
+};
+const agreementLabel = {
+  innerText: '我已阅读并同意 《服务协议》 和 《隐私政策》',
+  textContent: '我已阅读并同意 《服务协议》 和 《隐私政策》',
+  hidden: false,
+  getBoundingClientRect() { return { width: 220, height: 24 }; },
+  parentElement: null,
+  querySelector(selector) {
+    return selector.includes('checkbox') ? agreementCheckbox : null;
+  },
+};
+rememberCheckbox.parentElement = rememberLabel;
+agreementCheckbox.parentElement = agreementLabel;
+
+const document = {
+  querySelectorAll(selector) {
+    if (selector === 'label, div, span, p, form') {
+      return [rememberLabel, agreementLabel];
+    }
+    if (selector === 'input[type="checkbox"], [role="checkbox"], .ivu-checkbox, .el-checkbox') {
+      return [rememberCheckbox, agreementCheckbox];
+    }
+    return [];
+  },
+};
+
+const window = {
+  getComputedStyle() {
+    return { display: 'block', visibility: 'visible' };
+  },
+};
+
+${bundle}
+
+return {
+  findAgreementCheckbox,
+  rememberCheckbox,
+  agreementCheckbox,
+};
+`)();
+
+  assert.equal(api.findAgreementCheckbox(), api.agreementCheckbox);
+});
+
+test('ensureAgreementChecked clicks all visible login checkboxes', async () => {
+  const bundle = [
+    extractFunction('isVisibleNode'),
+    extractFunction('resolveActionTarget'),
+    extractFunction('isCheckboxChecked'),
+    extractFunction('ensureAgreementChecked'),
+  ].join('\n');
+
+  const api = new Function(`
+const rememberCheckbox = {
+  disabled: false,
+  readOnly: false,
+  hidden: false,
+  checked: false,
+  classList: { contains() { return false; } },
+  getBoundingClientRect() { return { width: 14, height: 14 }; },
+  click() { this.checked = true; },
+  closest(selector) {
+    if (selector === 'button, [role="button"], a, label, .el-checkbox, .el-checkbox__input') return this;
+    return null;
+  },
+  querySelector() { return null; },
+  getAttribute(name) {
+    if (name === 'aria-checked') return this.checked ? 'true' : 'false';
+    return '';
+  },
+};
+const agreementCheckbox = {
+  disabled: false,
+  readOnly: false,
+  hidden: false,
+  checked: false,
+  classList: { contains() { return false; } },
+  getBoundingClientRect() { return { width: 14, height: 14 }; },
+  click() { this.checked = true; },
+  closest(selector) {
+    if (selector === 'button, [role="button"], a, label, .el-checkbox, .el-checkbox__input') return this;
+    return null;
+  },
+  querySelector() { return null; },
+  getAttribute(name) {
+    if (name === 'aria-checked') return this.checked ? 'true' : 'false';
+    return '';
+  },
+};
+
+const document = {
+  querySelectorAll(selector) {
+    if (selector === 'input[type="checkbox"], [role="checkbox"], .ivu-checkbox, .el-checkbox') {
+      return [rememberCheckbox, agreementCheckbox];
+    }
+    return [];
+  },
+};
+
+const window = {
+  getComputedStyle() {
+    return { display: 'block', visibility: 'visible' };
+  },
+};
+
+async function sleep() {}
+function simulateClick(node) {
+  node.click();
+}
+
+${bundle}
+
+return {
+  rememberCheckbox,
+  agreementCheckbox,
+  ensureAgreementChecked,
+};
+`)();
+
+  const result = await api.ensureAgreementChecked();
+
+  assert.equal(result, true);
+  assert.equal(api.rememberCheckbox.checked, true);
+  assert.equal(api.agreementCheckbox.checked, true);
 });

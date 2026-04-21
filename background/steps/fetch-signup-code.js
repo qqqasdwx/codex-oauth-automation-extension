@@ -1,12 +1,15 @@
 (function attachBackgroundStep4(root, factory) {
   root.MultiPageBackgroundStep4 = factory();
 })(typeof self !== 'undefined' ? self : globalThis, function createBackgroundStep4Module() {
+  const MAIL_2925_FILTER_LOOKBACK_MS = 10 * 60 * 1000;
+
   function createStep4Executor(deps = {}) {
     const {
       addLog,
       chrome,
       completeStepFromBackground,
       confirmCustomVerificationStepBypass,
+      ensureMail2925MailboxSession,
       getMailConfig,
       getTabId,
       HOTMAIL_PROVIDER,
@@ -26,6 +29,10 @@
       const mail = getMailConfig(state);
       if (mail.error) throw new Error(mail.error);
       const stepStartedAt = Date.now();
+      const verificationFilterAfterTimestamp = mail.provider === '2925'
+        ? Math.max(0, stepStartedAt - MAIL_2925_FILTER_LOOKBACK_MS)
+        : stepStartedAt;
+      const verificationSessionKey = `4:${stepStartedAt}`;
       const signupTabId = await getTabId('signup-page');
       if (!signupTabId) {
         throw new Error('认证页面标签页已关闭，无法继续步骤 4。');
@@ -74,6 +81,14 @@
         || mail.provider === CLOUDFLARE_TEMP_EMAIL_PROVIDER
       ) {
         await addLog(`步骤 4：正在通过 ${mail.label} 轮询验证码...`);
+      } else if (mail.provider === '2925') {
+        if (state?.mail2925UseAccountPool && typeof ensureMail2925MailboxSession === 'function') {
+          await ensureMail2925MailboxSession({
+            accountId: state.currentMail2925AccountId || null,
+            actionLabel: '步骤 4：确认 2925 邮箱登录态',
+          });
+        }
+        await addLog(`步骤 4：正在通过 ${mail.label} 轮询验证码...`);
       } else {
         await addLog(`步骤 4：正在打开${mail.label}...`);
 
@@ -97,7 +112,9 @@
       }
 
       await resolveVerificationStep(4, state, mail, {
-        filterAfterTimestamp: stepStartedAt,
+        filterAfterTimestamp: verificationFilterAfterTimestamp,
+        sessionKey: verificationSessionKey,
+        disableTimeBudgetCap: mail.provider === '2925',
         requestFreshCodeFirst: false,
         resendIntervalMs: (mail.provider === HOTMAIL_PROVIDER || mail.provider === '2925')
           ? 0

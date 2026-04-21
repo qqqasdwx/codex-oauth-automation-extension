@@ -138,6 +138,7 @@ return {
   assert.deepStrictEqual(api.run(), {
     state: 'error',
     retryButton: { textContent: 'Try again' },
+    userAlreadyExistsBlocked: false,
   });
 });
 
@@ -188,5 +189,6 @@ return {
   assert.deepStrictEqual(api.run(), {
     state: 'error',
     retryButton: { textContent: 'Try again' },
+    userAlreadyExistsBlocked: false,
   });
 });

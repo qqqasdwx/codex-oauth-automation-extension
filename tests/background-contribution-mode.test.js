@@ -92,6 +92,8 @@ const DEFAULT_STATE = { panelMode: 'cpa' };
 const CONTRIBUTION_RUNTIME_DEFAULTS = {
   contributionMode: false,
   contributionModeExpected: false,
+  contributionNickname: '',
+  contributionQq: '',
   contributionSessionId: '',
   contributionAuthUrl: '',
   contributionAuthState: '',
@@ -123,6 +125,8 @@ return { buildContributionModeState };
     {
       contributionMode: true,
       contributionModeExpected: true,
+      contributionNickname: '',
+      contributionQq: '',
       contributionSessionId: 'session-001',
       contributionAuthUrl: 'https://auth.example.com',
       contributionAuthState: '',
@@ -153,6 +157,8 @@ return { buildContributionModeState };
     {
       contributionMode: false,
       contributionModeExpected: false,
+      contributionNickname: '',
+      contributionQq: '',
       contributionSessionId: '',
       contributionAuthUrl: '',
       contributionAuthState: '',
@@ -215,7 +221,7 @@ test('message router handles contribution mode, start flow, and status polling m
   });
   const startResponse = await router.handleMessage({
     type: 'START_CONTRIBUTION_FLOW',
-    payload: { nickname: '阿青' },
+    payload: { nickname: '阿青', qq: '123456' },
   });
   const pollResponse = await router.handleMessage({
     type: 'POLL_CONTRIBUTION_STATUS',
@@ -227,7 +233,7 @@ test('message router handles contribution mode, start flow, and status polling m
   assert.equal(pollResponse.ok, true);
   assert.deepStrictEqual(calls, [
     { type: 'toggle', enabled: true },
-    { type: 'start', options: { nickname: '阿青' } },
+    { type: 'start', options: { nickname: '阿青', qq: '123456' } },
     { type: 'poll', options: { reason: 'test_poll' } },
   ]);
 });
@@ -260,17 +266,20 @@ test('message router re-syncs contribution mode before AUTO_RUN when sidepanel p
 
   const response = await router.handleMessage({
     type: 'AUTO_RUN',
-    payload: {
-      totalRuns: 2,
-      autoRunSkipFailures: true,
-      mode: 'restart',
-      contributionMode: true,
-    },
-  });
+      payload: {
+        totalRuns: 2,
+        autoRunSkipFailures: true,
+        mode: 'restart',
+        contributionMode: true,
+        contributionNickname: '阿青',
+        contributionQq: '123456',
+      },
+    });
 
   assert.equal(response.ok, true);
   assert.deepStrictEqual(calls, [
     { type: 'toggle', enabled: true },
+    { type: 'setState', updates: { contributionNickname: '阿青', contributionQq: '123456' } },
     { type: 'setState', updates: { autoRunSkipFailures: true } },
     { type: 'startAutoRunLoop', totalRuns: 2, options: { autoRunSkipFailures: true, mode: 'restart' } },
   ]);
@@ -412,6 +421,8 @@ test('contribution oauth manager starts session, opens auth url, submits callbac
   assert.equal(startedState.contributionAuthTabId, 88);
   assert.equal(tabCalls.length, 1);
   assert.match(fetchCalls[0].url, /\/start$/);
+  assert.match(String(fetchCalls[0].options.body || ''), /"nickname":""/);
+  assert.match(String(fetchCalls[0].options.body || ''), /"qq":""/);
   assert.match(fetchCalls[1].url, /\/status\?/);
 
   const callbackState = await manager.handleCapturedCallback(
@@ -500,7 +511,7 @@ return { refreshOAuthUrlBeforeStep6 };
     {
       type: 'contribution',
       options: {
-        nickname: 'user@example.com',
+        nickname: '',
         openAuthTab: false,
         stateOverride: {
           contributionMode: true,

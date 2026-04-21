@@ -35,6 +35,8 @@ const btnOpenRelease = document.getElementById('btn-open-release');
 const settingsCard = document.getElementById('settings-card');
 const contributionModePanel = document.getElementById('contribution-mode-panel');
 const contributionModeText = document.getElementById('contribution-mode-text');
+const inputContributionNickname = document.getElementById('input-contribution-nickname');
+const inputContributionQq = document.getElementById('input-contribution-qq');
 const contributionOauthStatus = document.getElementById('contribution-oauth-status');
 const contributionCallbackStatus = document.getElementById('contribution-callback-status');
 const contributionModeSummary = document.getElementById('contribution-mode-summary');
@@ -117,6 +119,7 @@ const inputTempEmailDomain = document.getElementById('input-temp-email-domain');
 const btnTempEmailDomainMode = document.getElementById('btn-temp-email-domain-mode');
 const hotmailSection = document.getElementById('hotmail-section');
 const outlookemailSection = document.getElementById('outlookemail-section');
+const mail2925Section = document.getElementById('mail2925-section');
 const luckmailSection = document.getElementById('luckmail-section');
 const inputOutlookEmailBaseUrl = document.getElementById('input-outlookemail-base-url');
 const inputOutlookEmailPassword = document.getElementById('input-outlookemail-password');
@@ -163,6 +166,16 @@ const btnDeleteAllHotmailAccounts = document.getElementById('btn-delete-all-hotm
 const btnToggleHotmailList = document.getElementById('btn-toggle-hotmail-list');
 const hotmailListShell = document.getElementById('hotmail-list-shell');
 const hotmailAccountsList = document.getElementById('hotmail-accounts-list');
+const inputMail2925Email = document.getElementById('input-mail2925-email');
+const inputMail2925Password = document.getElementById('input-mail2925-password');
+const inputMail2925Import = document.getElementById('input-mail2925-import');
+const btnAddMail2925Account = document.getElementById('btn-add-mail2925-account');
+const btnCancelMail2925Edit = document.getElementById('btn-cancel-mail2925-edit');
+const btnImportMail2925Accounts = document.getElementById('btn-import-mail2925-accounts');
+const btnDeleteAllMail2925Accounts = document.getElementById('btn-delete-all-mail2925-accounts');
+const btnToggleMail2925List = document.getElementById('btn-toggle-mail2925-list');
+const mail2925ListShell = document.getElementById('mail2925-list-shell');
+const mail2925AccountsList = document.getElementById('mail2925-accounts-list');
 const inputLuckmailApiKey = document.getElementById('input-luckmail-api-key');
 const inputLuckmailBaseUrl = document.getElementById('input-luckmail-base-url');
 const selectLuckmailEmailType = document.getElementById('select-luckmail-email-type');
@@ -184,6 +197,9 @@ const luckmailList = document.getElementById('luckmail-list');
 const rowEmailPrefix = document.getElementById('row-email-prefix');
 const labelEmailPrefix = document.getElementById('label-email-prefix');
 const inputEmailPrefix = document.getElementById('input-email-prefix');
+const selectMail2925PoolAccount = document.getElementById('select-mail2925-pool-account');
+const inputMail2925UseAccountPool = document.getElementById('input-mail2925-use-account-pool');
+const labelMail2925UseAccountPool = document.getElementById('label-mail2925-use-account-pool');
 const rowInbucketHost = document.getElementById('row-inbucket-host');
 const inputInbucketHost = document.getElementById('input-inbucket-host');
 const rowInbucketMailbox = document.getElementById('row-inbucket-mailbox');
@@ -320,7 +336,70 @@ function getManagedAliasBaseEmailKey(provider = selectMailProvider.value) {
   return '';
 }
 
+function isMail2925AccountPoolEnabled(state = latestState) {
+  return Boolean(state?.mail2925UseAccountPool);
+}
+
+function getPreferredMail2925PoolAccountId(state = latestState) {
+  const currentId = String(state?.currentMail2925AccountId || '').trim();
+  if (currentId && getMail2925Accounts(state).some((account) => account.id === currentId)) {
+    return currentId;
+  }
+  return '';
+}
+
+function syncMail2925PoolAccountOptions(state = latestState) {
+  if (!selectMail2925PoolAccount) {
+    return;
+  }
+
+  const accounts = getMail2925Accounts(state);
+  const selectedId = getPreferredMail2925PoolAccountId(state);
+  const options = ['<option value="">请选择号池邮箱</option>'].concat(
+    accounts.map((account) => `<option value="${escapeHtml(account.id)}">${escapeHtml(account.email || '(未命名账号)')}</option>`)
+  );
+  selectMail2925PoolAccount.innerHTML = options.join('');
+  selectMail2925PoolAccount.value = selectedId;
+}
+
+async function syncSelectedMail2925PoolAccount(options = {}) {
+  const { silent = false } = options;
+  if (!selectMail2925PoolAccount || !isMail2925AccountPoolEnabled(latestState)) {
+    return null;
+  }
+
+  const accountId = String(selectMail2925PoolAccount.value || '').trim();
+  if (!accountId) {
+    syncLatestState({ currentMail2925AccountId: null });
+    setManagedAliasBaseEmailInputForProvider('2925', latestState);
+    return null;
+  }
+
+  const response = await chrome.runtime.sendMessage({
+    type: 'SELECT_MAIL2925_ACCOUNT',
+    source: 'sidepanel',
+    payload: { accountId },
+  });
+  if (response?.error) {
+    throw new Error(response.error);
+  }
+
+  syncLatestState({ currentMail2925AccountId: response.account?.id || accountId });
+  setManagedAliasBaseEmailInputForProvider('2925', latestState);
+  if (!silent) {
+    showToast(`已切换当前 2925 号池邮箱为 ${response.account?.email || accountId}`, 'success', 1800);
+  }
+  return response.account || null;
+}
+
 function getManagedAliasBaseEmailForProvider(provider = selectMailProvider.value, state = latestState) {
+  if (String(provider || '').trim().toLowerCase() === '2925' && isMail2925AccountPoolEnabled(state)) {
+    const currentMail2925Email = getCurrentMail2925Email(state);
+    if (currentMail2925Email) {
+      return currentMail2925Email;
+    }
+  }
+
   const key = getManagedAliasBaseEmailKey(provider);
   if (!key) {
     return '';
@@ -339,11 +418,16 @@ function buildManagedAliasBaseEmailPayload(state = latestState) {
   const payload = {
     gmailBaseEmail: String(state?.gmailBaseEmail || '').trim(),
     mail2925BaseEmail: String(state?.mail2925BaseEmail || '').trim(),
+    mail2925UseAccountPool: Boolean(state?.mail2925UseAccountPool),
     emailPrefix: '',
   };
   const key = getManagedAliasBaseEmailKey();
   if (key) {
-    payload[key] = inputEmailPrefix.value.trim();
+    if (key === 'mail2925BaseEmail' && isMail2925AccountPoolEnabled(state)) {
+      payload[key] = String(state?.mail2925BaseEmail || '').trim();
+    } else {
+      payload[key] = inputEmailPrefix.value.trim();
+    }
   }
   return payload;
 }
@@ -353,10 +437,14 @@ function syncManagedAliasBaseEmailDraftFromInput(provider = selectMailProvider.v
   if (!key) {
     return;
   }
+  if (key === 'mail2925BaseEmail' && isMail2925AccountPoolEnabled(latestState)) {
+    return;
+  }
   syncLatestState({ [key]: inputEmailPrefix.value.trim() });
 }
 
 function setManagedAliasBaseEmailInputForProvider(provider = selectMailProvider.value, state = latestState) {
+  syncMail2925PoolAccountOptions(state);
   inputEmailPrefix.value = getManagedAliasBaseEmailForProvider(provider, state);
 }
 
@@ -1362,6 +1450,9 @@ function collectSettingsPayload() {
     !cloudflareTempEmailDomainEditMode ? selectTempEmailDomain.value : tempEmailActiveDomain
   ) || tempEmailActiveDomain;
   const contributionModeEnabled = Boolean(latestState?.contributionMode);
+  const mail2925UseAccountPool = typeof inputMail2925UseAccountPool !== 'undefined'
+    ? Boolean(inputMail2925UseAccountPool?.checked)
+    : Boolean(latestState?.mail2925UseAccountPool);
   return {
     panelMode: selectPanelMode.value,
     vpsUrl: inputVpsUrl.value.trim(),
@@ -1379,6 +1470,7 @@ function collectSettingsPayload() {
     }),
     mailProvider: selectMailProvider.value,
     mail2925Mode: getSelectedMail2925Mode(),
+    mail2925UseAccountPool,
     emailGenerator: selectEmailGenerator.value,
     autoDeleteUsedIcloudAlias: checkboxAutoDeleteIcloud?.checked,
     icloudHostPreference: selectIcloudHostPreference?.value || 'auto',
@@ -1794,6 +1886,15 @@ function applySettingsState(state) {
   }
   if (inputAccountRunHistoryHelperBaseUrl) {
     inputAccountRunHistoryHelperBaseUrl.value = normalizeAccountRunHistoryHelperBaseUrlValue(state?.accountRunHistoryHelperBaseUrl);
+  }
+  if (inputContributionNickname) {
+    inputContributionNickname.value = state?.contributionNickname || '';
+  }
+  if (inputContributionQq) {
+    inputContributionQq.value = state?.contributionQq || '';
+  }
+  if (inputMail2925UseAccountPool) {
+    inputMail2925UseAccountPool.checked = Boolean(state?.mail2925UseAccountPool);
   }
   setManagedAliasBaseEmailInputForProvider(restoredMailProvider, state);
   inputInbucketHost.value = state?.inbucketHost || '';
@@ -2254,6 +2355,19 @@ function getCurrentHotmailEmail(state = latestState) {
   return String(getCurrentHotmailAccount(state)?.email || '').trim();
 }
 
+function getMail2925Accounts(state = latestState) {
+  return Array.isArray(state?.mail2925Accounts) ? state.mail2925Accounts : [];
+}
+
+function getCurrentMail2925Account(state = latestState) {
+  const currentId = state?.currentMail2925AccountId;
+  return getMail2925Accounts(state).find((account) => account.id === currentId) || null;
+}
+
+function getCurrentMail2925Email(state = latestState) {
+  return String(getCurrentMail2925Account(state)?.email || '').trim();
+}
+
 function getCurrentLuckmailPurchase(state = latestState) {
   return state?.currentLuckmailPurchase || null;
 }
@@ -2421,6 +2535,8 @@ function updateMailLoginButtonState() {
 function updateMailProviderUI() {
   const use2925 = selectMailProvider.value === '2925';
   const useGmail = selectMailProvider.value === GMAIL_PROVIDER;
+  const useMail2925 = selectMailProvider.value === '2925';
+  const useMail2925AccountPool = useMail2925 && Boolean(inputMail2925UseAccountPool?.checked);
   const mail2925Mode = getSelectedMail2925Mode();
   const useGeneratedAlias = usesGeneratedAliasMailProvider(selectMailProvider.value, mail2925Mode);
   const useInbucket = selectMailProvider.value === 'inbucket';
@@ -2487,11 +2603,24 @@ function updateMailProviderUI() {
   if (outlookemailSection) {
     outlookemailSection.style.display = useOutlookEmail ? '' : 'none';
   }
+  if (mail2925Section) {
+    mail2925Section.style.display = useMail2925AccountPool ? '' : 'none';
+  }
   if (luckmailSection) {
     luckmailSection.style.display = useLuckmail ? '' : 'none';
   }
   labelEmailPrefix.textContent = '邮箱前缀';
   inputEmailPrefix.placeholder = '例如 abc';
+  if (labelMail2925UseAccountPool) {
+    labelMail2925UseAccountPool.style.display = useMail2925 ? '' : 'none';
+  }
+  syncMail2925PoolAccountOptions(latestState);
+  if (selectMail2925PoolAccount) {
+    selectMail2925PoolAccount.style.display = useMail2925AccountPool ? '' : 'none';
+    selectMail2925PoolAccount.disabled = !useMail2925AccountPool || getMail2925Accounts().length === 0;
+  }
+  inputEmailPrefix.style.display = useMail2925AccountPool ? 'none' : '';
+  inputEmailPrefix.readOnly = useMail2925AccountPool;
   selectEmailGenerator.disabled = useOutlookEmail || useHotmail || useLuckmail || useGeneratedAlias || useCustomEmail;
   if (useGmail) {
     labelEmailPrefix.textContent = 'Gmail 原邮箱';
@@ -2544,6 +2673,11 @@ function updateMailProviderUI() {
   if (autoHintText && useGeneratedAlias && aliasUiCopy?.hint) {
     autoHintText.textContent = aliasUiCopy.hint;
   }
+  if (autoHintText && useMail2925AccountPool) {
+    autoHintText.textContent = getMail2925Accounts().length
+      ? '当前已启用 2925 号池模式，步骤 3 会基于下拉框选中的号池邮箱生成别名地址'
+      : '当前已启用 2925 号池模式，请先在下方 2925 账号池中添加账号并选择邮箱';
+  }
   if (autoHintText && showCloudflareTempEmailReceiveMailbox) {
     autoHintText.textContent = '若注册邮箱会转发到 Cloudflare Temp Email，请在“邮件接收”中填写实际接收转发邮件的邮箱。';
   }
@@ -2555,6 +2689,9 @@ function updateMailProviderUI() {
     inputEmail.value = getCurrentLuckmailEmail();
   }
   renderHotmailAccounts();
+  if (useMail2925) {
+    renderMail2925Accounts();
+  }
   if (useLuckmail) {
     renderLuckmailPurchases();
   }
@@ -3007,6 +3144,51 @@ const bindOutlookEmailEvents = outlookEmailManager?.bindEvents
   || (() => { });
 bindOutlookEmailEvents();
 
+const mail2925Manager = window.SidepanelMail2925Manager?.createMail2925Manager({
+  state: {
+    getLatestState: () => latestState,
+    syncLatestState,
+  },
+  dom: {
+    btnAddMail2925Account,
+    btnCancelMail2925Edit,
+    btnDeleteAllMail2925Accounts,
+    btnImportMail2925Accounts,
+    btnToggleMail2925List,
+    inputMail2925Email,
+    inputMail2925Import,
+    inputMail2925Password,
+    mail2925AccountsList,
+    mail2925ListShell,
+  },
+  helpers: {
+    copyTextToClipboard,
+    escapeHtml,
+    getMail2925Accounts,
+    openConfirmModal,
+    refreshManagedAliasBaseEmail: () => {
+      setManagedAliasBaseEmailInputForProvider('2925', latestState);
+    },
+    showToast,
+  },
+  runtime: {
+    sendMessage: (message) => chrome.runtime.sendMessage(message),
+  },
+  constants: {
+    copyIcon: COPY_ICON,
+    displayTimeZone: DISPLAY_TIMEZONE,
+    expandedStorageKey: 'multipage-mail2925-list-expanded',
+  },
+  mail2925Utils: window.Mail2925Utils || {},
+});
+const initMail2925ListExpandedState = mail2925Manager?.initMail2925ListExpandedState
+  || (() => { });
+const renderMail2925Accounts = mail2925Manager?.renderMail2925Accounts
+  || (() => { });
+const bindMail2925Events = mail2925Manager?.bindMail2925Events
+  || (() => { });
+bindMail2925Events();
+
 const icloudManager = window.SidepanelIcloudManager?.createIcloudManager({
   dom: {
     btnIcloudBulkDelete,
@@ -3174,6 +3356,8 @@ const contributionModeManager = window.SidepanelContributionMode?.createContribu
   dom: {
     btnConfigMenu,
     btnContributionMode,
+    inputContributionNickname,
+    inputContributionQq,
     contributionCallbackStatus,
     btnExitContributionMode,
     btnOpenAccountRecords,
@@ -3201,6 +3385,10 @@ const contributionModeManager = window.SidepanelContributionMode?.createContribu
     closeAccountRecordsPanel,
     closeConfigMenu,
     getContributionNickname: () => latestState?.email || '',
+    getContributionProfile: () => ({
+      nickname: String(inputContributionNickname?.value || '').trim(),
+      qq: String(inputContributionQq?.value || '').trim(),
+    }),
     isModeSwitchBlocked: isContributionModeSwitchBlocked,
     openConfirmModal,
     openExternalUrl,
@@ -3216,7 +3404,7 @@ const contributionModeManager = window.SidepanelContributionMode?.createContribu
   },
   constants: {
     contributionOauthUrl: 'https://apikey.qzz.io/oauth/',
-    contributionUploadUrl: 'https://apikey.qzz.io/',
+    contributionUploadUrl: 'https://apikey.qzz.io',
   },
 });
 const renderContributionMode = contributionModeManager?.render
@@ -3579,6 +3767,8 @@ async function startAutoRunFromCurrentSettings() {
   const totalRuns = getRunCountValue();
   let mode = 'restart';
   const autoRunSkipFailures = inputAutoSkipFailures.checked;
+  const contributionNickname = String(inputContributionNickname?.value || '').trim();
+  const contributionQq = String(inputContributionQq?.value || '').trim();
   const fallbackThreadIntervalMinutes = normalizeAutoRunThreadIntervalMinutes(
     inputAutoSkipFailuresThreadIntervalMinutes.value
   );
@@ -3621,6 +3811,8 @@ async function startAutoRunFromCurrentSettings() {
       delayMinutes,
       autoRunSkipFailures,
       contributionMode: Boolean(latestState?.contributionMode),
+      contributionNickname,
+      contributionQq,
       mode,
     },
   });
@@ -3894,6 +4086,13 @@ selectMailProvider.addEventListener('change', async () => {
   if (leavingOutlookEmail || leavingHotmail || leavingLuckmail || leavingGeneratedAlias) {
     await clearRegistrationEmail({ silent: true }).catch(() => { });
   }
+  if (nextProvider === '2925' && Boolean(inputMail2925UseAccountPool?.checked)) {
+    syncMail2925PoolAccountOptions(latestState);
+    if (!selectMail2925PoolAccount.value && getMail2925Accounts().length > 0) {
+      selectMail2925PoolAccount.value = String(getMail2925Accounts()[0]?.id || '');
+    }
+    await syncSelectedMail2925PoolAccount({ silent: true }).catch(() => { });
+  }
   if (nextProvider === LUCKMAIL_PROVIDER) {
     queueLuckmailPurchaseRefresh();
   }
@@ -4072,6 +4271,36 @@ inputEmailPrefix.addEventListener('input', () => {
 inputEmailPrefix.addEventListener('blur', () => {
   maybeClearGeneratedAliasAfterEmailPrefixChange().catch(() => {});
   syncManagedAliasBaseEmailDraftFromInput();
+  saveSettings({ silent: true }).catch(() => {});
+});
+
+selectMail2925PoolAccount?.addEventListener('change', async () => {
+  try {
+    await syncSelectedMail2925PoolAccount();
+    markSettingsDirty(true);
+    saveSettings({ silent: true }).catch(() => {});
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
+});
+
+inputMail2925UseAccountPool?.addEventListener('change', async () => {
+  const enabled = Boolean(inputMail2925UseAccountPool.checked);
+  syncLatestState({ mail2925UseAccountPool: enabled });
+  if (enabled) {
+    syncMail2925PoolAccountOptions(latestState);
+    if (!selectMail2925PoolAccount.value && getMail2925Accounts().length > 0) {
+      selectMail2925PoolAccount.value = String(getMail2925Accounts()[0]?.id || '');
+    }
+    try {
+      await syncSelectedMail2925PoolAccount({ silent: true });
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+  }
+  setManagedAliasBaseEmailInputForProvider('2925', latestState);
+  updateMailProviderUI();
+  markSettingsDirty(true);
   saveSettings({ silent: true }).catch(() => {});
 });
 
@@ -4327,6 +4556,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       updateProgressCounter();
       updateButtonStates();
       renderHotmailAccounts();
+      renderMail2925Accounts();
       if (isLuckmailProvider()) {
         queueLuckmailPurchaseRefresh();
       }
@@ -4395,6 +4625,12 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         renderHotmailAccounts();
         if (selectMailProvider.value === 'hotmail-api') {
           inputEmail.value = getCurrentHotmailEmail();
+        }
+      }
+      if (message.payload.currentMail2925AccountId !== undefined || message.payload.mail2925Accounts !== undefined) {
+        renderMail2925Accounts();
+        if (selectMailProvider.value === '2925') {
+          setManagedAliasBaseEmailInputForProvider('2925', latestState);
         }
       }
       if (message.payload.luckmailApiKey !== undefined) {
@@ -4557,6 +4793,7 @@ document.addEventListener('keydown', (event) => {
 initializeManualStepActions();
 initTheme();
 initHotmailListExpandedState();
+initMail2925ListExpandedState();
 updateSaveButtonState();
 updateConfigMenuControls();
 setLocalCpaStep9Mode(DEFAULT_LOCAL_CPA_STEP9_MODE);

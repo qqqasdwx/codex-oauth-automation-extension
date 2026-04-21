@@ -89,8 +89,10 @@ test('step 8 submits login verification directly without replaying step 7', asyn
   ]);
 });
 
-test('step 8 disables resend interval for 2925 mailbox polling', async () => {
+test('step 8 uses a fixed 10-minute lookback window and disables resend interval for 2925 mailbox polling', async () => {
   let capturedOptions = null;
+  const realDateNow = Date.now;
+  Date.now = () => 900000;
 
   const executor = api.createStep8Executor({
     addLog: async () => {},
@@ -130,12 +132,17 @@ test('step 8 disables resend interval for 2925 mailbox polling', async () => {
     throwIfStopped: () => {},
   });
 
-  await executor.executeStep8({
-    email: 'user@example.com',
-    password: 'secret',
-    oauthUrl: 'https://oauth.example/latest',
-  });
+  try {
+    await executor.executeStep8({
+      email: 'user@example.com',
+      password: 'secret',
+      oauthUrl: 'https://oauth.example/latest',
+    });
+  } finally {
+    Date.now = realDateNow;
+  }
 
+  assert.equal(capturedOptions.filterAfterTimestamp, 300000);
   assert.equal(capturedOptions.resendIntervalMs, 0);
   assert.equal(capturedOptions.targetEmail, '');
   assert.equal(capturedOptions.beforeSubmit, undefined);
