@@ -25,15 +25,39 @@
       throwIfStopped,
     } = deps;
 
+    async function focusOrOpenMailTab(mail) {
+      const alive = await isTabAlive(mail.source);
+      if (alive) {
+        if (mail.navigateOnReuse) {
+          await reuseOrCreateTab(mail.source, mail.url, {
+            inject: mail.inject,
+            injectSource: mail.injectSource,
+          });
+          return;
+        }
+
+        const tabId = await getTabId(mail.source);
+        await chrome.tabs.update(tabId, { active: true });
+        return;
+      }
+
+      await reuseOrCreateTab(mail.source, mail.url, {
+        inject: mail.inject,
+        injectSource: mail.injectSource,
+      });
+    }
+
     async function executeStep4(state) {
       const mail = getMailConfig(state);
       if (mail.error) throw new Error(mail.error);
+
       const stepStartedAt = Date.now();
       const verificationFilterAfterTimestamp = mail.provider === '2925'
         ? Math.max(0, stepStartedAt - MAIL_2925_FILTER_LOOKBACK_MS)
         : stepStartedAt;
       const verificationSessionKey = `4:${stepStartedAt}`;
       const signupTabId = await getTabId('signup-page');
+
       if (!signupTabId) {
         throw new Error('认证页面标签页已关闭，无法继续步骤 4。');
       }
@@ -41,6 +65,7 @@
       await chrome.tabs.update(signupTabId, { active: true });
       throwIfStopped();
       await addLog('步骤 4：正在确认注册验证码页面是否就绪，必要时自动恢复密码页超时报错...');
+
       const prepareResult = await sendToContentScriptResilient(
         'signup-page',
         {
@@ -91,24 +116,7 @@
         await addLog(`步骤 4：正在通过 ${mail.label} 轮询验证码...`);
       } else {
         await addLog(`步骤 4：正在打开${mail.label}...`);
-
-        const alive = await isTabAlive(mail.source);
-        if (alive) {
-          if (mail.navigateOnReuse) {
-            await reuseOrCreateTab(mail.source, mail.url, {
-              inject: mail.inject,
-              injectSource: mail.injectSource,
-            });
-          } else {
-            const tabId = await getTabId(mail.source);
-            await chrome.tabs.update(tabId, { active: true });
-          }
-        } else {
-          await reuseOrCreateTab(mail.source, mail.url, {
-            inject: mail.inject,
-            injectSource: mail.injectSource,
-          });
-        }
+        await focusOrOpenMailTab(mail);
       }
 
       await resolveVerificationStep(4, state, mail, {
