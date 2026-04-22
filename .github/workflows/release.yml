@@ -2,20 +2,27 @@ name: Publish Release
 
 on:
   push:
-    tags:
-      - 'Pro*'
-      - 'v*'
+    branches:
+      - master
+      - main
   workflow_dispatch:
     inputs:
       tag_name:
-        description: '已存在的版本标签，例如 Pro4.0'
-        required: true
+        description: '可选：手动指定版本标签，留空则自动取上游最新 tag'
+        required: false
       release_name:
-        description: 'Release 展示名称，留空则使用 tag_name'
+        description: '可选：Release 展示名称，留空则使用 tag_name'
         required: false
 
 permissions:
   contents: write
+
+concurrency:
+  group: publish-release-${{ github.ref_name }}
+  cancel-in-progress: true
+
+env:
+  UPSTREAM_REPO_URL: https://github.com/QLHazyCoder/codex-oauth-automation-extension.git
 
 jobs:
   publish-release:
@@ -30,15 +37,83 @@ jobs:
       - name: Resolve release metadata
         id: meta
         shell: bash
+        env:
+          MANUAL_TAG_NAME: ${{ github.event.inputs.tag_name || '' }}
+          MANUAL_RELEASE_NAME: ${{ github.event.inputs.release_name || '' }}
         run: |
           manifest_version_name="$(node -p "require('./manifest.json').version_name")"
 
-          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
-            tag_name="${{ github.event.inputs.tag_name }}"
-            release_name="${{ github.event.inputs.release_name }}"
+          if [[ -n "${MANUAL_TAG_NAME}" ]]; then
+            tag_name="${MANUAL_TAG_NAME}"
           else
-            tag_name="${GITHUB_REF_NAME}"
-            release_name=""
+            upstream_tags="$(
+              git ls-remote --tags --refs "${UPSTREAM_REPO_URL}" 'Pro*' 'v*' \
+                | awk '{print $2}' \
+                | sed 's#refs/tags/##' \
+                | sort -u
+            )"
+
+            if [[ -z "${upstream_tags}" ]]; then
+              echo "未读取到上游版本标签。" >&2
+              exit 1
+            fi
+
+            tag_name="$(
+              UPSTREAM_TAGS="${upstream_tags}" node <<'NODE'
+              const raw = String(process.env.UPSTREAM_TAGS || '');
+              const tags = raw.split(/\r?\n/).map((item) => item.trim()).filter(Boolean);
+
+              function getVersionFamily(version) {
+                if (/^pro/i.test(version)) return 'pro';
+                if (/^v/i.test(version)) return 'legacy';
+                return 'other';
+              }
+
+              function getFamilyRank(family) {
+                if (family === 'pro') return 2;
+                if (family === 'legacy') return 1;
+                return 0;
+              }
+
+              function extractVersionCore(version) {
+                const core = String(version || '').trim().replace(/^(?:pro|v)\s*/i, '').split('-')[0];
+                return /^\d+(?:\.\d+){1,3}$/.test(core) ? core : '';
+              }
+
+              function parseTag(tag) {
+                const family = getVersionFamily(tag);
+                const core = extractVersionCore(tag);
+                return {
+                  raw: tag,
+                  family,
+                  familyRank: getFamilyRank(family),
+                  parts: core ? core.split('.').map((part) => Number.parseInt(part, 10) || 0) : [0],
+                };
+              }
+
+              function compareTags(leftTag, rightTag) {
+                const left = parseTag(leftTag);
+                const right = parseTag(rightTag);
+
+                if (left.familyRank !== right.familyRank) {
+                  return left.familyRank - right.familyRank;
+                }
+
+                const maxLength = Math.max(left.parts.length, right.parts.length, 3);
+                for (let index = 0; index < maxLength; index += 1) {
+                  const diff = (left.parts[index] || 0) - (right.parts[index] || 0);
+                  if (diff !== 0) {
+                    return diff;
+                  }
+                }
+
+                return left.raw.localeCompare(right.raw, 'en', { numeric: true, sensitivity: 'base' });
+              }
+
+              tags.sort(compareTags);
+              process.stdout.write(tags[tags.length - 1] || '');
+              NODE
+            )"
           fi
 
           if [[ -z "${tag_name}" ]]; then
@@ -51,6 +126,7 @@ jobs:
             exit 1
           fi
 
+          release_name="${MANUAL_RELEASE_NAME}"
           if [[ -z "${release_name}" ]]; then
             release_name="${tag_name}"
           fi
@@ -58,6 +134,17 @@ jobs:
           echo "tag_name=${tag_name}" >> "${GITHUB_OUTPUT}"
           echo "release_name=${release_name}" >> "${GITHUB_OUTPUT}"
           echo "asset_name=codex-oauth-automation-extension-${tag_name}.zip" >> "${GITHUB_OUTPUT}"
+          echo "resolved upstream/latest tag: ${tag_name}"
+
+      - name: Force release tag to current commit
+        shell: bash
+        env:
+          TAG_NAME: ${{ steps.meta.outputs.tag_name }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -f "${TAG_NAME}" "${GITHUB_SHA}"
+          git push origin "refs/tags/${TAG_NAME}" --force
 
       - name: Build extension package zip
         id: package
@@ -91,6 +178,7 @@ jobs:
               'icloud-utils.js',
               'icons',
               'luckmail-utils.js',
+              'mail2925-utils.js',
               'managed-alias-utils.js',
               'manifest.json',
               'microsoft-email.js',
@@ -100,6 +188,7 @@ jobs:
               'sidepanel',
               'start-hotmail-helper.bat',
               'start-hotmail-helper.command',
+              '本仓库与上游仓库差别.md',
           ]
 
           with zipfile.ZipFile(package_path, 'w', compression=zipfile.ZIP_DEFLATED) as archive:
@@ -123,7 +212,9 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.meta.outputs.tag_name }}
+          target_commitish: ${{ github.sha }}
           name: ${{ steps.meta.outputs.release_name }}
           generate_release_notes: false
+          make_latest: true
           overwrite_files: true
           files: ${{ steps.package.outputs.package_path }}
