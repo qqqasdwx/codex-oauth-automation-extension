@@ -43,6 +43,7 @@
       getPendingAutoRunTimerPlan,
       getSourceLabel,
       getState,
+      getTabId,
       getStopRequested,
       handleAutoRunLoopUnhandledError,
       importSettingsBundle,
@@ -54,6 +55,7 @@
       isLuckmailProvider,
       isOutlookEmailProvider,
       isStopError,
+      isTabAlive,
       launchAutoRunTimerPlan,
       listIcloudAliases,
       listLuckmailPurchasesForManagement,
@@ -112,6 +114,23 @@
       return appendAccountRunRecord(status, state, reason);
     }
 
+    async function ensureManualStepPrerequisites(step) {
+      if (step !== 4) {
+        return;
+      }
+
+      const signupTabId = typeof getTabId === 'function'
+        ? await getTabId('signup-page')
+        : null;
+      const signupTabAlive = signupTabId && typeof isTabAlive === 'function'
+        ? await isTabAlive('signup-page')
+        : Boolean(signupTabId);
+
+      if (!signupTabId || !signupTabAlive) {
+        throw new Error('手动执行步骤 4 前，请先执行步骤 1 或步骤 2，确保认证页仍然打开并停留在验证码页。');
+      }
+    }
+
     async function handleStepData(step, payload) {
       switch (step) {
         case 1: {
@@ -125,6 +144,8 @@
           if (payload.sub2apiGroupId !== undefined) updates.sub2apiGroupId = payload.sub2apiGroupId || null;
           if (payload.sub2apiDraftName !== undefined) updates.sub2apiDraftName = payload.sub2apiDraftName || null;
           if (payload.sub2apiProxyId !== undefined) updates.sub2apiProxyId = payload.sub2apiProxyId || null;
+          if (payload.codex2apiSessionId !== undefined) updates.codex2apiSessionId = payload.codex2apiSessionId || null;
+          if (payload.codex2apiOAuthState !== undefined) updates.codex2apiOAuthState = payload.codex2apiOAuthState || null;
           if (Object.keys(updates).length) {
             await setState(updates);
           }
@@ -440,6 +461,9 @@
             await ensureManualInteractionAllowed('手动执行步骤');
           }
           const step = message.payload.step;
+          if (message.source === 'sidepanel') {
+            await ensureManualStepPrerequisites(step);
+          }
           if (message.source === 'sidepanel') {
             await invalidateDownstreamAfterStepRestart(step, { logLabel: `步骤 ${step} 重新执行` });
           }

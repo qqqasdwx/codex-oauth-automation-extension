@@ -4,7 +4,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>多页面自动化面板</title>
+  <title>codex-oauth-automation-extension</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link
@@ -112,6 +112,7 @@
         <select id="select-panel-mode" class="data-select">
           <option value="cpa">CPA 面板</option>
           <option value="sub2api">SUB2API</option>
+          <option value="codex2api">Codex2API</option>
         </select>
       </div>
       <div id="contribution-mode-panel" class="contribution-mode-panel" hidden>
@@ -186,10 +187,10 @@
         </div>
       </div>
       <div class="data-row" id="row-local-cpa-step9-mode">
-        <span class="data-label">本地 CPA</span>
-        <div id="local-cpa-step9-mode-group" class="choice-group" role="group" aria-label="本地 CPA 第 10 步策略">
-          <button type="button" class="choice-btn" data-local-cpa-step9-mode="submit">全部回调</button>
-          <button type="button" class="choice-btn" data-local-cpa-step9-mode="bypass">跳过第10步</button>
+        <span class="data-label">回调方式</span>
+        <div id="local-cpa-step9-mode-group" class="choice-group" role="group" aria-label="回调方式">
+          <button type="button" class="choice-btn" data-local-cpa-step9-mode="submit">服务器部署</button>
+          <button type="button" class="choice-btn" data-local-cpa-step9-mode="bypass">本地部署</button>
         </div>
       </div>
       <div class="data-row" id="row-sub2api-url" style="display:none;">
@@ -213,6 +214,16 @@
         <span class="data-label">默认代理</span>
         <input type="text" id="input-sub2api-default-proxy" class="data-input"
           placeholder="留空则不使用代理；或填写代理名称 / ID" />
+      </div>
+      <div class="data-row" id="row-codex2api-url" style="display:none;">
+        <span class="data-label">Codex2API</span>
+        <input type="text" id="input-codex2api-url" class="data-input"
+          placeholder="http://localhost:8080/admin/accounts" />
+      </div>
+      <div class="data-row" id="row-codex2api-admin-key" style="display:none;">
+        <span class="data-label">管理密钥</span>
+        <input type="password" id="input-codex2api-admin-key" class="data-input"
+          placeholder="请输入 Codex2API Admin Secret" />
       </div>
       <div class="data-row" id="row-custom-password">
         <span class="data-label">账户密码</span>
@@ -257,31 +268,6 @@
           <option value="icloud">iCloud 隐私邮箱</option>
           <option value="cloudflare-temp-email">Cloudflare Temp Email</option>
         </select>
-      </div>
-      <div class="data-row" id="row-temp-email-base-url" style="display:none;">
-        <span class="data-label">Temp API</span>
-        <input type="text" id="input-temp-email-base-url" class="data-input" placeholder="https://your-worker-domain" />
-      </div>
-      <div class="data-row" id="row-temp-email-admin-auth" style="display:none;">
-        <span class="data-label">Admin Auth</span>
-        <input type="password" id="input-temp-email-admin-auth" class="data-input data-input-with-icon" placeholder="Cloudflare Temp Email admin password" />
-      </div>
-      <div class="data-row" id="row-temp-email-custom-auth" style="display:none;">
-        <span class="data-label">Custom Auth</span>
-        <input type="password" id="input-temp-email-custom-auth" class="data-input data-input-with-icon" placeholder="仅当站点启用了访问密码时再填写；这是额外鉴权，不替代 Admin Auth。" />
-      </div>
-      <div class="data-row" id="row-temp-email-receive-mailbox" style="display:none;">
-        <span class="data-label">邮件接收</span>
-        <input type="text" id="input-temp-email-receive-mailbox" class="data-input" placeholder="用于接收转发邮件的邮箱，例如 1@email.example.com" />
-      </div>
-      <div class="data-row" id="row-temp-email-domain" style="display:none;">
-        <span class="data-label">Temp 域名</span>
-        <div class="data-inline">
-          <select id="select-temp-email-domain" class="data-select"></select>
-          <input type="text" id="input-temp-email-domain" class="data-input" placeholder="例如 mail.example.com"
-            style="display:none;" />
-          <button id="btn-temp-email-domain-mode" class="btn btn-outline btn-sm" type="button">添加</button>
-        </div>
       </div>
       <div class="data-row" id="row-cf-domain" style="display:none;">
         <span class="data-label">CF 域名</span>
@@ -411,6 +397,56 @@
         <button id="btn-save-settings" class="btn btn-outline btn-sm data-inline-btn" type="button">保存</button>
       </div>
     </div>
+    </div>
+    <div id="cloudflare-temp-email-section" class="data-card hotmail-card" style="display:none;">
+      <div class="section-mini-header">
+        <div class="section-mini-copy">
+          <span class="section-label">Cloudflare Temp Email</span>
+          <span class="data-value">用于生成邮箱或接收转发邮件</span>
+        </div>
+        <div class="section-mini-actions">
+          <button id="btn-cloudflare-temp-email-usage-guide" class="btn btn-ghost btn-xs" type="button">使用教程</button>
+          <button id="btn-cloudflare-temp-email-github" class="btn btn-ghost btn-xs" type="button">GitHub</button>
+        </div>
+      </div>
+      <div class="data-row" id="row-temp-email-base-url" style="display:none;">
+        <span class="data-label">Temp API</span>
+        <input type="text" id="input-temp-email-base-url" class="data-input" placeholder="https://your-worker-domain" />
+      </div>
+      <div class="data-row" id="row-temp-email-admin-auth" style="display:none;">
+        <span class="data-label">Admin Auth</span>
+        <input type="password" id="input-temp-email-admin-auth" class="data-input data-input-with-icon" placeholder="Cloudflare Temp Email admin password" />
+      </div>
+      <div class="data-row" id="row-temp-email-custom-auth" style="display:none;">
+        <span class="data-label">Custom Auth</span>
+        <input type="password" id="input-temp-email-custom-auth" class="data-input data-input-with-icon" placeholder="仅当站点启用了访问密码时再填写；这是额外鉴权，不替代 Admin Auth。" />
+      </div>
+      <div class="data-row" id="row-temp-email-receive-mailbox" style="display:none;">
+        <span class="data-label">邮件接收</span>
+        <input type="text" id="input-temp-email-receive-mailbox" class="data-input" placeholder="用于接收转发邮件的邮箱，例如 1@email.example.com" />
+      </div>
+      <div class="data-row" id="row-temp-email-random-subdomain-toggle" style="display:none;">
+        <span class="data-label">随机子域</span>
+        <div class="data-inline">
+          <label class="toggle-switch" for="input-temp-email-use-random-subdomain" title="依赖后端 RANDOM_SUBDOMAIN_DOMAINS 配置">
+            <input type="checkbox" id="input-temp-email-use-random-subdomain" />
+            <span class="toggle-switch-track" aria-hidden="true">
+              <span class="toggle-switch-thumb"></span>
+            </span>
+            <span>启用</span>
+          </label>
+          <span class="setting-caption">依赖后端 RANDOM_SUBDOMAIN_DOMAINS</span>
+        </div>
+      </div>
+      <div class="data-row" id="row-temp-email-domain" style="display:none;">
+        <span class="data-label">Temp 域名</span>
+        <div class="data-inline">
+          <select id="select-temp-email-domain" class="data-select"></select>
+          <input type="text" id="input-temp-email-domain" class="data-input" placeholder="例如 mail.example.com"
+            style="display:none;" />
+          <button id="btn-temp-email-domain-mode" class="btn btn-outline btn-sm" type="button">添加</button>
+        </div>
+      </div>
     </div>
     <div id="hotmail-section" class="data-card hotmail-card" style="display:none;">
       <div class="section-mini-header">

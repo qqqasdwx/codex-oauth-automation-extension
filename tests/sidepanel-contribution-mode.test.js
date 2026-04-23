@@ -135,6 +135,8 @@ const inputSub2ApiEmail = { value: 'user@example.com' };
 const inputSub2ApiPassword = { value: 'sub-secret' };
 const inputSub2ApiGroup = { value: ' codex ' };
 const inputSub2ApiDefaultProxy = { value: ' proxy-a ' };
+const inputCodex2ApiUrl = { value: 'http://localhost:8080/admin/accounts' };
+const inputCodex2ApiAdminKey = { value: 'codex-admin-secret' };
 const inputPassword = { value: 'Secret123!' };
 const selectMailProvider = { value: '163' };
 const selectEmailGenerator = { value: 'duck' };
@@ -154,6 +156,7 @@ const inputTempEmailBaseUrl = { value: 'https://temp.example.com' };
 const inputTempEmailAdminAuth = { value: 'admin-secret' };
 const inputTempEmailCustomAuth = { value: 'custom-secret' };
 const inputTempEmailReceiveMailbox = { value: 'relay@example.com' };
+const inputTempEmailUseRandomSubdomain = { checked: true };
 const inputAutoSkipFailures = { checked: false };
 const inputAutoSkipFailuresThreadIntervalMinutes = { value: '5' };
 const inputAutoDelayEnabled = { checked: true };
@@ -200,12 +203,16 @@ return {
   assert.equal('customPassword' in contributionPayload, false);
   assert.equal('accountRunHistoryTextEnabled' in contributionPayload, false);
   assert.equal('accountRunHistoryHelperBaseUrl' in contributionPayload, false);
+  assert.equal(contributionPayload.cloudflareTempEmailUseRandomSubdomain, true);
 
   api.setLatestState({ contributionMode: false });
   const normalPayload = api.collectSettingsPayload();
   assert.equal(normalPayload.customPassword, 'Secret123!');
   assert.equal(normalPayload.accountRunHistoryTextEnabled, true);
   assert.equal(normalPayload.accountRunHistoryHelperBaseUrl, 'http://127.0.0.1:17373');
+  assert.equal(normalPayload.codex2apiUrl, 'http://localhost:8080/admin/accounts');
+  assert.equal(normalPayload.codex2apiAdminKey, 'codex-admin-secret');
+  assert.equal(normalPayload.cloudflareTempEmailUseRandomSubdomain, true);
 });
 
 test('contribution mode manager enters mode, starts main auto flow, polls contribution status, and exits cleanly', async () => {
@@ -274,6 +281,8 @@ test('contribution mode manager enters mode, starts main auto flow, polls contri
     rowSub2ApiGroup: createElement(),
     rowSub2ApiPassword: createElement(),
     rowSub2ApiUrl: createElement(),
+    rowCodex2ApiUrl: createElement(),
+    rowCodex2ApiAdminKey: createElement(),
     rowVpsPassword: createElement(),
     rowVpsUrl: createElement(),
     selectPanelMode: createElement({ value: 'sub2api' }),
@@ -424,6 +433,8 @@ test('contribution mode manager enters mode, starts main auto flow, polls contri
   assert.equal(dom.contributionModeSummary.textContent.length > 0, true);
   assert.equal(dom.btnContributionMode.classList.contains('is-active'), true);
   assert.equal(dom.rowVpsUrl.classList.contains('is-contribution-hidden'), true);
+  assert.equal(dom.rowCodex2ApiUrl.classList.contains('is-contribution-hidden'), true);
+  assert.equal(dom.rowCodex2ApiAdminKey.classList.contains('is-contribution-hidden'), true);
   assert.ok(closeConfigMenuCount >= 1);
   assert.ok(closeAccountRecordsCount >= 1);
   assert.ok(updatePanelModeCount >= 1);

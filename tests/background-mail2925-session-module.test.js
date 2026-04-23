@@ -294,3 +294,46 @@ test('handleMail2925LimitReachedError stops immediately when account pool is off
   assert.equal(events.stopCalls.length, 1);
   assert.equal(currentState.currentMail2925AccountId, 'current');
 });
+
+test('setCurrentMail2925Account persists currentMail2925AccountId for browser restart restore', async () => {
+  const source = fs.readFileSync('background/mail-2925-session.js', 'utf8');
+  const globalScope = {};
+  const api = new Function('self', `${source}; return self.MultiPageBackgroundMail2925Session;`)(globalScope);
+
+  let currentState = {
+    mail2925Accounts: mail2925Utils.normalizeMail2925Accounts([
+      { id: 'acc-1', email: 'acc1@2925.com', password: 'p1', enabled: true, lastUsedAt: 10 },
+    ]),
+    currentMail2925AccountId: null,
+  };
+  const persistedUpdates = [];
+
+  const manager = api.createMail2925SessionManager({
+    addLog: async () => {},
+    broadcastDataUpdate: () => {},
+    chrome: {},
+    findMail2925Account: mail2925Utils.findMail2925Account,
+    getMail2925AccountStatus: mail2925Utils.getMail2925AccountStatus,
+    getState: async () => currentState,
+    isMail2925AccountAvailable: mail2925Utils.isMail2925AccountAvailable,
+    MAIL2925_LIMIT_COOLDOWN_MS: mail2925Utils.MAIL2925_LIMIT_COOLDOWN_MS,
+    normalizeMail2925Account: mail2925Utils.normalizeMail2925Account,
+    normalizeMail2925Accounts: mail2925Utils.normalizeMail2925Accounts,
+    pickMail2925AccountForRun: mail2925Utils.pickMail2925AccountForRun,
+    setPersistentSettings: async (payload) => {
+      persistedUpdates.push(payload);
+    },
+    setState: async (updates) => {
+      currentState = { ...currentState, ...updates };
+    },
+    throwIfStopped: () => {},
+    upsertMail2925AccountInList: mail2925Utils.upsertMail2925AccountInList,
+  });
+
+  await manager.setCurrentMail2925Account('acc-1');
+
+  assert.equal(currentState.currentMail2925AccountId, 'acc-1');
+  assert.deepStrictEqual(persistedUpdates, [
+    { currentMail2925AccountId: 'acc-1' },
+  ]);
+});

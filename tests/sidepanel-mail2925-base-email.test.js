@@ -142,3 +142,89 @@ return {
   assert.equal(api.getLatestState().mail2925BaseEmail, 'new@2925.com');
   assert.equal(api.getSaveCalls(), 1);
 });
+
+test('collectSettingsPayload persists currentMail2925AccountId for 2925 account pool restore', () => {
+  const bundle = [
+    extractFunction('collectSettingsPayload'),
+  ].join('\n');
+
+  const api = new Function(`
+let latestState = {
+  contributionMode: false,
+  mail2925UseAccountPool: true,
+  currentMail2925AccountId: 'acc-2',
+};
+let cloudflareDomainEditMode = false;
+let cloudflareTempEmailDomainEditMode = false;
+const selectCfDomain = { value: 'example.com' };
+const selectTempEmailDomain = { value: 'mail.example.com' };
+const selectPanelMode = { value: 'cpa' };
+const inputVpsUrl = { value: '' };
+const inputVpsPassword = { value: '' };
+const inputSub2ApiUrl = { value: '' };
+const inputSub2ApiEmail = { value: '' };
+const inputSub2ApiPassword = { value: '' };
+const inputSub2ApiGroup = { value: '' };
+const inputSub2ApiDefaultProxy = { value: '' };
+const inputCodex2ApiUrl = { value: '' };
+const inputCodex2ApiAdminKey = { value: '' };
+const inputPassword = { value: '' };
+const selectMailProvider = { value: '2925' };
+const selectEmailGenerator = { value: 'duck' };
+const checkboxAutoDeleteIcloud = { checked: false };
+const selectIcloudHostPreference = { value: 'auto' };
+const inputAccountRunHistoryTextEnabled = { checked: false };
+const inputAccountRunHistoryHelperBaseUrl = { value: '' };
+const inputMail2925UseAccountPool = { checked: true };
+const inputInbucketHost = { value: '' };
+const inputInbucketMailbox = { value: '' };
+const inputHotmailRemoteBaseUrl = { value: '' };
+const inputHotmailLocalBaseUrl = { value: '' };
+const inputLuckmailApiKey = { value: '' };
+const inputLuckmailBaseUrl = { value: '' };
+const selectLuckmailEmailType = { value: 'ms_graph' };
+const inputLuckmailDomain = { value: '' };
+const inputTempEmailBaseUrl = { value: '' };
+const inputTempEmailAdminAuth = { value: '' };
+const inputTempEmailCustomAuth = { value: '' };
+const inputTempEmailReceiveMailbox = { value: '' };
+const inputTempEmailUseRandomSubdomain = { checked: false };
+const inputAutoSkipFailures = { checked: false };
+const inputAutoSkipFailuresThreadIntervalMinutes = { value: '0' };
+const inputAutoDelayEnabled = { checked: false };
+const inputAutoDelayMinutes = { value: '30' };
+const inputAutoStepDelaySeconds = { value: '' };
+const inputVerificationResendCount = { value: '4' };
+const DEFAULT_VERIFICATION_RESEND_COUNT = 4;
+function getCloudflareDomainsFromState() {
+  return { domains: [], activeDomain: '' };
+}
+function normalizeCloudflareDomainValue(value) { return String(value || '').trim(); }
+function getCloudflareTempEmailDomainsFromState() {
+  return { domains: [], activeDomain: '' };
+}
+function normalizeCloudflareTempEmailDomainValue(value) { return String(value || '').trim(); }
+function getSelectedLocalCpaStep9Mode() { return 'submit'; }
+function getSelectedMail2925Mode() { return 'provide'; }
+function getSelectedHotmailServiceMode() { return 'local'; }
+function buildManagedAliasBaseEmailPayload() {
+  return { gmailBaseEmail: '', mail2925BaseEmail: 'demo@2925.com', emailPrefix: '' };
+}
+function normalizeLuckmailBaseUrl(value) { return String(value || '').trim(); }
+function normalizeLuckmailEmailType(value) { return String(value || '').trim() || 'ms_graph'; }
+function normalizeCloudflareTempEmailBaseUrlValue(value) { return String(value || '').trim(); }
+function normalizeCloudflareTempEmailReceiveMailboxValue(value) { return String(value || '').trim(); }
+function normalizeAccountRunHistoryHelperBaseUrlValue(value) { return String(value || '').trim(); }
+function normalizeAutoRunThreadIntervalMinutes(value) { return Number(value) || 0; }
+function normalizeAutoDelayMinutes(value) { return Number(value) || 30; }
+function normalizeAutoStepDelaySeconds(value) { return value === '' ? null : Number(value); }
+function normalizeVerificationResendCount(value, fallback) { return Number(value) || fallback; }
+${bundle}
+return { collectSettingsPayload };
+`)();
+
+  const payload = api.collectSettingsPayload();
+
+  assert.equal(payload.currentMail2925AccountId, 'acc-2');
+  assert.equal(payload.mail2925UseAccountPool, true);
+});

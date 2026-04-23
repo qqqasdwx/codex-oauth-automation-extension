@@ -51,10 +51,8 @@ function extractFunction(name) {
   return source.slice(start, end);
 }
 
-test('step 8 click effect returns restart_current_step when retry page is recovered', async () => {
+test('step 8 click effect throws when retry page appears after clicking continue', async () => {
   const api = new Function(`
-let recoverCalls = 0;
-
 const chrome = {
   tabs: {
     async get() {
@@ -69,10 +67,6 @@ const chrome = {
 function throwIfStopped() {}
 async function sleepWithStop() {}
 async function ensureStep8SignupPageReady() {}
-async function recoverAuthRetryPageOnTab() {
-  recoverCalls += 1;
-  return { recovered: true };
-}
 async function getStep8PageState() {
   return {
     url: 'https://auth.openai.com/authorize',
@@ -89,20 +83,51 @@ return {
   async run() {
     return waitForStep8ClickEffect(88, 'https://auth.openai.com/authorize', 1000);
   },
-  snapshot() {
-    return { recoverCalls };
+};
+`)();
+
+  await assert.rejects(
+    () => api.run(),
+    /点击“继续”后页面进入认证页重试页/
+  );
+});
+
+test('step 8 ready check throws when consent page is already a retry page before clicking', async () => {
+  const api = new Function(`
+const chrome = {
+  tabs: {
+    async get() {
+      return {
+        id: 88,
+        url: 'https://auth.openai.com/authorize',
+      };
+    },
+  },
+};
+
+function throwIfStopped() {}
+async function sleepWithStop() {}
+async function ensureStep8SignupPageReady() {}
+async function getStep8PageState() {
+  return {
+    url: 'https://auth.openai.com/authorize',
+    retryPage: true,
+    addPhonePage: false,
+    consentReady: false,
+  };
+}
+
+${extractFunction('waitForStep8Ready')}
+
+return {
+  async run() {
+    return waitForStep8Ready(88, 1000);
   },
 };
 `)();
 
-  const result = await api.run();
-  const snapshot = api.snapshot();
-
-  assert.deepStrictEqual(result, {
-    progressed: false,
-    reason: 'retry_page_recovered',
-    restartCurrentStep: true,
-    url: 'https://auth.openai.com/authorize',
-  });
-  assert.equal(snapshot.recoverCalls, 1);
+  await assert.rejects(
+    () => api.run(),
+    /当前认证页已进入重试页/
+  );
 });

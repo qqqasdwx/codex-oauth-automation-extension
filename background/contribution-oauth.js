@@ -599,6 +599,7 @@
         body: {
           nickname: buildNickname(currentState, options.nickname),
           qq: buildContributionQq(currentState, options.qq),
+          email: normalizeString(currentState.email),
           source: 'cpa',
           channel: 'codex-extension',
         },

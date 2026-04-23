@@ -24,6 +24,8 @@
       dom.rowSub2ApiPassword,
       dom.rowSub2ApiGroup,
       dom.rowSub2ApiDefaultProxy,
+      dom.rowCodex2ApiUrl,
+      dom.rowCodex2ApiAdminKey,
       dom.rowCustomPassword,
       dom.rowAccountRunHistoryHelperBaseUrl,
     ].filter(Boolean);
